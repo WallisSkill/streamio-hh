@@ -51,6 +51,10 @@ code{background:#eee;padding:2px 6px;border-radius:4px}a.btn{display:inline-bloc
  * Shared request handler.
  * Used by the local node:http server and by the Vercel serverless entry point,
  * so both surfaces route identically.
+ *
+ * Also exported as default: Vercel may pick this module as the function
+ * entrypoint, and it rejects an entrypoint whose default export is not a
+ * function or a server. The (req, res) signature already matches what it wants.
  */
 export async function handleRequest(req, res) {
   if (req.method === 'OPTIONS') return send(res, 204, {});
@@ -94,3 +98,5 @@ export async function handleRequest(req, res) {
     return send(res, 500, { err: err.message });
   }
 }
+
+export default handleRequest;
