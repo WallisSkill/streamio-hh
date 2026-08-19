@@ -23,6 +23,29 @@ http://localhost:7000/manifest.json
 PORT=7010 npm start
 ```
 
+## Deploy lên Vercel
+
+Repo đã có sẵn `api/index.js` và `vercel.json`, không cần cấu hình gì thêm:
+
+```bash
+npx vercel --prod
+```
+
+Hoặc vào vercel.com → Add New Project → import repo này → Deploy. Không cần
+khai biến môi trường nào; địa chỉ addon tự suy ra từ domain Vercel cấp.
+
+Xong thì mở `https://<tên-app>.vercel.app` và bấm **Cài vào Stremio**.
+
+### Hai điều cần biết khi chạy serverless
+
+**Cache trong RAM mất mỗi lần cold start.** Bù lại, mọi phản hồi đều gắn
+`s-maxage=600`, nên CDN của Vercel trả thẳng cho lần bấm thứ hai mà không
+gọi lại hàm. Lần đầu một tập mất khoảng 3–4 giây, sau đó gần như tức thì.
+
+**Tự dò slug HH3D không chạy trên Vercel** vì runtime không có `curl`. Addon
+tự bỏ qua HH3D, các nguồn khác không ảnh hưởng. Muốn giữ link HH3D thì ghim
+slug trong `overrides.json` — cách đó vẫn chạy bình thường trên serverless.
+
 ## Vấn đề số tập, và cách addon xử lý
 
 Đây là phần khó nhất. Các trang phim Việt đánh số tập theo **hai kiểu khác nhau**,
