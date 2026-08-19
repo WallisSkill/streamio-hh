@@ -1,0 +1,20 @@
+{
+  "_readme": [
+    "Ghim thủ công khi addon chọn nhầm nguồn hoặc map nhầm số tập.",
+    "Key = IMDb id (tt...) hoặc kitsu:<id>. Mọi trường bên trong đều không bắt buộc.",
+    "titles          = tên phụ, thêm vào từ khoá tìm kiếm trên KKPhim",
+    "seasons.<n>.kkphim = slug KKPhim chứa phần đó",
+    "seasons.<n>.hh3d   = slug HH3D; link tập dựng theo /xem-phim-<slug>/tap-<N>-sv1.html",
+    "seasons.<n>.mode   = 'season' (nguồn đếm 1..N trong phần) hoặc 'absolute'",
+    "seasons.<n>.offset = cộng thêm vào số tập, dùng cho phim chia cour lệch số",
+    "Sửa file này xong KHÔNG cần restart, addon tự nạp lại sau ~5 giây.",
+    "_example bên dưới chỉ để tham khảo, key bắt đầu bằng _ nên không có tác dụng."
+  ],
+  "_example": {
+    "titles": ["Doupo Cangqiong", "Fights Break Sphere"],
+    "seasons": {
+      "5": { "kkphim": "dau-pha-thuong-khung-phan-5", "mode": "season" },
+      "1": { "hh3d": "dau-pha-thuong-khung", "offset": 0 }
+    }
+  }
+}

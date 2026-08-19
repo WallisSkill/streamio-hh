@@ -1,0 +1,65 @@
+import { CONFIG } from '../config.js';
+import { cached } from './cache.js';
+
+async function raw(url, { timeout = CONFIG.httpTimeout, referer, headers = {} } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      signal: ctrl.signal,
+      headers: {
+        'user-agent': CONFIG.userAgent,
+        'accept-language': 'vi,en;q=0.8',
+        ...(referer ? { referer } : {}),
+        ...headers,
+      },
+    });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function withRetry(fn, tries = 2) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+export async function getJson(url, opts = {}) {
+  return cached(`json:${url}`, () =>
+    withRetry(async () => {
+      const res = await raw(url, opts);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      return res.json();
+    }),
+  );
+}
+
+export async function getText(url, opts = {}) {
+  return cached(`text:${url}`, () =>
+    withRetry(async () => {
+      const res = await raw(url, opts);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      return { body: await res.text(), finalUrl: res.url };
+    }),
+  );
+}
+
+/** Never throws — returns null on any failure. Used so one dead source cannot break a response. */
+export async function safe(promise, label) {
+  try {
+    return await promise;
+  } catch (err) {
+    console.warn(`[${label}] ${err.message}`);
+    return null;
+  }
+}
