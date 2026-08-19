@@ -1,8 +1,19 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { CONFIG } from '../config.js';
 
-const run = promisify(execFile);
+// Loaded on demand: serverless runtimes have no curl, and keeping
+// node:child_process off the module init path means a runtime that restricts
+// it cannot crash the whole function at import time.
+let run;
+async function getRun() {
+  if (!run) {
+    const [{ execFile }, { promisify }] = await Promise.all([
+      import('node:child_process'),
+      import('node:util'),
+    ]);
+    run = promisify(execFile);
+  }
+  return run;
+}
 
 /**
  * Fetch a public page through curl.
@@ -28,7 +39,8 @@ export async function curlGet(url, { timeout = 20 } = {}) {
     '\n__CURL_META__%{http_code}|%{url_effective}',
     url,
   ];
-  const { stdout } = await run('curl', args, { maxBuffer: 20 * 1024 * 1024, timeout: (timeout + 5) * 1000 });
+  const exec = await getRun();
+  const { stdout } = await exec('curl', args, { maxBuffer: 20 * 1024 * 1024, timeout: (timeout + 5) * 1000 });
   const at = stdout.lastIndexOf('\n__CURL_META__');
   if (at === -1) throw new Error('curl: no metadata in response');
   const [code, finalUrl] = stdout.slice(at + 14).split('|');
@@ -41,7 +53,8 @@ let available = null;
 export async function curlAvailable() {
   if (available !== null) return available;
   try {
-    await run('curl', ['--version'], { timeout: 5000 });
+    const exec = await getRun();
+    await exec('curl', ['--version'], { timeout: 5000 });
     available = true;
   } catch {
     available = false;

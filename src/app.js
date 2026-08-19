@@ -53,12 +53,20 @@ code{background:#eee;padding:2px 6px;border-radius:4px}a.btn{display:inline-bloc
  * so both surfaces route identically.
  */
 export async function handleRequest(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const path = decodeURIComponent(url.pathname).replace(/\/+$/, '') || '/';
-
   if (req.method === 'OPTIONS') return send(res, 204, {});
 
   try {
+    // Inside the try: a stray '%' makes decodeURIComponent throw URIError, and a
+    // proxied req.url is not guaranteed to parse. Neither may crash the process.
+    let path;
+    try {
+      path = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
+      path = decodeURIComponent(path);
+    } catch {
+      path = String(req.url || '/').split('?')[0];
+    }
+    path = path.replace(/\/+$/, '') || '/';
+
     if (path === '/') {
       res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' });
       return res.end(landingPage(req));

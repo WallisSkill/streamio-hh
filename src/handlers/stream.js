@@ -15,7 +15,15 @@ function apiSources() {
 
 /** `tt123`, `tt123:2:5`, `kitsu:456`, `kitsu:456:7` */
 export function parseId(type, rawId) {
-  const id = decodeURIComponent(rawId).replace(/\.json$/, '');
+  // Stremio ids are already safe, but a hand-typed URL can carry a stray '%'
+  // and decodeURIComponent throws on those.
+  let id;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {
+    id = String(rawId);
+  }
+  id = id.replace(/[.]json$/, '');
   const kitsu = /^kitsu:(\d+)(?::(\d+))?(?::(\d+))?$/.exec(id);
   if (kitsu) {
     const [, kid, a, b] = kitsu;
