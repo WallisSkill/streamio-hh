@@ -120,11 +120,23 @@ Trả về nguồn đã chọn, điểm khớp, lý do khớp và chế độ đ
 |---|---|---|
 | **KKPhim** (phimapi.com) | Có, m3u8 trực tiếp | Nhiều server: Vietsub / Thuyết Minh / Lồng Tiếng |
 | **Ophim** (ophim1.com) | Có, m3u8 trực tiếp | Có `imdb.id` + `tmdb.season` cho cả donghua nên khớp ID chính xác hơn |
+| **Nguồn C** (phim.nguonc.com) | Không — chỉ link mở trang | [API mở](https://phim.nguonc.com/api-document), không cần key. Xem giải thích bên dưới |
 | **HH3D** (hoathinh3d) | Không — chỉ link mở trang | Xem giải thích bên dưới |
 
 Cả KKPhim và Ophim đều là API JSON công khai, trả `link_m3u8` cho request ẩn
 danh, không cần token. Mỗi server của mỗi nguồn là một lựa chọn riêng trong
 Stremio.
+
+### Vì sao Nguồn C không phát trực tiếp được
+
+API của Nguồn C là JSON mở và addon đọc đúng phần đó. Nhưng mỗi tập chỉ trỏ
+tới một trang embed, và trang đó giấu nguồn phát sau base64 lồng nhau, chạy
+bộ phát hiện DevTools tự ép reload, chặn chuột phải và phím xem mã nguồn —
+một lớp chống trích xuất dựng có chủ đích.
+
+Addon **không phá lớp đó**. Tập của Nguồn C xuất hiện dưới dạng link mở đúng
+trang phát của họ, tức là đúng thứ API công bố. Số tập vẫn được map chuẩn qua
+cùng bộ máy như các nguồn khác.
 
 ### Vì sao HH3D không phát trực tiếp được
 

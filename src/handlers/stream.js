@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import kkphim from '../sources/kkphim.js';
 import ophim from '../sources/ophim.js';
+import nguonc from '../sources/nguonc.js';
 import * as hh3d from '../sources/hh3d.js';
 import { getCinemeta, buildEpisodeIndex, getAliases, getKitsuMeta } from '../lib/meta.js';
 import { filterCandidates } from '../lib/match.js';
@@ -10,7 +11,11 @@ import { getOverride } from '../lib/overrides.js';
 
 /** API sources that publish playable links openly. Order = display order. */
 function apiSources() {
-  return [CONFIG.enableKkphim ? kkphim : null, CONFIG.enableOphim ? ophim : null].filter(Boolean);
+  return [
+    CONFIG.enableKkphim ? kkphim : null,
+    CONFIG.enableOphim ? ophim : null,
+    CONFIG.enableNguonc ? nguonc : null,
+  ].filter(Boolean);
 }
 
 /** `tt123`, `tt123:2:5`, `kitsu:456`, `kitsu:456:7` */
@@ -187,11 +192,24 @@ async function streamsFrom(source, target, parsed, wantType, dbg) {
 
     const warn = picked.decision.confidence === 'low' ? ' ⚠️' : '';
     const quality = entry.quality ? `${entry.quality} · ${entry.lang}` : '';
+    const title = [entry.name, `▶ ${picked.episode.label}${warn}`, picked.decision.note, quality]
+      .filter(Boolean)
+      .join('\n');
+
+    // A link-only source hands out a player page, not a video track. Passing it
+    // as `url` would make Stremio try to play HTML, so it goes out as a link.
+    if (source.linkOnly) {
+      out.push({
+        name: `${source.label}${warn}\n${server.name}`,
+        title: `${title}\n↗ Mở trên ${source.label}`,
+        externalUrl: url,
+      });
+      continue;
+    }
+
     out.push({
       name: `${source.label}${warn}\n${server.name}`,
-      title: [entry.name, `▶ ${picked.episode.label}${warn}`, picked.decision.note, quality]
-        .filter(Boolean)
-        .join('\n'),
+      title,
       url,
       behaviorHints: {
         notWebReady: !picked.episode.m3u8,

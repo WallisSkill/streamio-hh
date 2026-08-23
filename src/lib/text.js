@@ -23,7 +23,10 @@ export function detectSeason(...titles) {
   for (const title of titles) {
     const n = normalize(title);
     if (!n) continue;
-    let m =
+    // "2nd Season" / "3rd Season" - the number leads (Nguon C style)
+    let m = /\b(\d{1,2})\s*(?:st|nd|rd|th)?\s+season\b/.exec(n);
+    if (m) return Number(m[1]);
+    m =
       /(?:phan|season|mua|part|quyen)\s+(\d{1,2})\b/.exec(n) ||
       /\bs(?:eason)?\s?(\d{1,2})\b/.exec(n);
     if (m) return Number(m[1]);
