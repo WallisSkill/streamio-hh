@@ -1,6 +1,34 @@
 import { CONFIG } from './config.js';
 import { MANIFEST } from './manifest.js';
 import { getStreams } from './handlers/stream.js';
+import { probe } from './lib/http.js';
+
+/**
+ * Hit every nguonc endpoint from this process's own IP and report the raw
+ * outcome of each — so when it runs on Vercel it shows precisely which path
+ * Cloudflare blocks (403) and which, if any, gets through (200).
+ */
+async function probeNguonc(keyword) {
+  const base = CONFIG.nguoncApi;
+  const kw = encodeURIComponent(keyword);
+  const slug = 'dai-chua-te';
+  const targets = [
+    { label: 'api-search', url: `${base}/api/films/search?keyword=${kw}` },
+    { label: 'api-detail', url: `${base}/api/film/${slug}` },
+    { label: 'web-search', url: `${base}/tim-kiem?load=1&keyword=${kw}`, headers: { 'x-requested-with': 'XMLHttpRequest' } },
+    { label: 'web-detail', url: `${base}/phim/${slug}` },
+  ];
+  const results = {};
+  await Promise.all(
+    targets.map(async (t) => {
+      results[t.label] = await probe(t.url, { headers: t.headers });
+    }),
+  );
+  const verdict = Object.fromEntries(
+    Object.entries(results).map(([k, v]) => [k, v.ok ? `OK ${v.status}` : `BLOCKED ${v.status ?? v.error}`]),
+  );
+  return { keyword, from: 'this-deployment-ip', verdict, detail: results };
+}
 
 const CORS = {
   'access-control-allow-origin': '*',
@@ -63,9 +91,10 @@ export async function handleRequest(req, res) {
     // Inside the try: a stray '%' makes decodeURIComponent throw URIError, and a
     // proxied req.url is not guaranteed to parse. Neither may crash the process.
     let path;
+    let url = null;
     try {
-      path = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
-      path = decodeURIComponent(path);
+      url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      path = decodeURIComponent(url.pathname);
     } catch {
       path = String(req.url || '/').split('?')[0];
     }
@@ -90,6 +119,13 @@ export async function handleRequest(req, res) {
     if (d) {
       const [, type, id] = d;
       return send(res, 200, await getStreams(type, id));
+    }
+
+    // /probe/nguonc — run FROM this deployment's IP and report each nguonc
+    // endpoint's real status, so it is visible exactly which path is blocked.
+    if (path === '/probe/nguonc') {
+      const kw = url?.searchParams?.get('kw') || 'dai chua te';
+      return send(res, 200, await probeNguonc(kw));
     }
 
     return send(res, 404, { err: 'not found' });
