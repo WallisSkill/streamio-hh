@@ -1,6 +1,12 @@
 const env = process.env;
 const bool = (v, d) => (v === undefined ? d : !/^(0|false|no)$/i.test(String(v)));
 
+// nguonc sits behind Cloudflare, which blocks datacenter IPs (Vercel etc.) with
+// a 403 on every path while letting residential IPs through. So it is only
+// useful when the addon runs from a home IP. Default it OFF on serverless hosts
+// and ON otherwise; an explicit ENABLE_NGUONC always wins.
+const onServerless = Boolean(env.VERCEL || env.AWS_LAMBDA_FUNCTION_NAME || env.NETLIFY);
+
 export const CONFIG = {
   port: Number(env.PORT || 7000),
   baseUrl: env.ADDON_BASE_URL || '',
@@ -9,7 +15,7 @@ export const CONFIG = {
   nguoncApi: (env.NGUONC_API || 'https://phim.nguonc.com').replace(/[/]+$/, ''),
   hh3dBase: (env.HH3D_BASE || 'https://hoathinh3d.so').replace(/\/+$/, ''),
   enableOphim: bool(env.ENABLE_OPHIM, true),
-  enableNguonc: bool(env.ENABLE_NGUONC, true),
+  enableNguonc: bool(env.ENABLE_NGUONC, !onServerless),
   enableKkphim: bool(env.ENABLE_KKPHIM, true),
   enableHh3d: bool(env.ENABLE_HH3D, true),
   cacheTtl: Number(env.CACHE_TTL || 1800) * 1000,
