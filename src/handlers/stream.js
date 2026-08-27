@@ -8,6 +8,7 @@ import { filterCandidates } from '../lib/match.js';
 import { resolveEpisode } from '../lib/episodeMap.js';
 import { baseTitle } from '../lib/text.js';
 import { getOverride } from '../lib/overrides.js';
+import { unwrapEmbed, embedFetchable } from '../lib/embed.js';
 
 /** API sources that publish playable links openly. Order = display order. */
 function apiSources() {
@@ -165,7 +166,7 @@ async function locateEntry(source, target, parsed, wantType, dbg) {
 }
 
 /** Resolve one API source into playable streams. */
-async function streamsFrom(source, target, parsed, wantType, dbg) {
+async function streamsFrom(source, target, parsed, wantType, dbg, baseUrl) {
   const entry = await locateEntry(source, target, parsed, wantType, dbg);
   if (!entry) return [];
 
@@ -187,32 +188,40 @@ async function streamsFrom(source, target, parsed, wantType, dbg) {
     dbg.decision = picked.decision;
     if (!picked.episode) continue;
 
-    const url = picked.episode.m3u8 || picked.episode.embed;
-    if (!url) continue;
+    // An embed link is an HTML page and Stremio's player only takes a media
+    // track. Most player pages carry that track in their own query string
+    // (player.phimapi.com/player/?url=<m3u8>), which costs nothing to read; the
+    // rest are deferred to /resolve so the page is fetched when the user hits
+    // play, not once per server while the list is being built.
+    const embed = picked.episode.embed || null;
+    const direct = picked.episode.m3u8 || unwrapEmbed(embed);
+    const lazy =
+      !direct && embed && baseUrl && !source.linkOnly && embedFetchable(embed)
+        ? `${baseUrl}/resolve?u=${encodeURIComponent(embed)}`
+        : null;
+    const url = direct || lazy;
+    if (!url && !embed) continue;
 
     const warn = picked.decision.confidence === 'low' ? ' ⚠️' : '';
     const quality = entry.quality ? `${entry.quality} · ${entry.lang}` : '';
     const title = [entry.name, `▶ ${picked.episode.label}${warn}`, picked.decision.note, quality]
       .filter(Boolean)
       .join('\n');
+    const name = `${source.label}${warn}\n${server.name}`;
 
-    // A link-only source hands out a player page, not a video track. Passing it
-    // as `url` would make Stremio try to play HTML, so it goes out as a link.
-    if (source.linkOnly) {
-      out.push({
-        name: `${source.label}${warn}\n${server.name}`,
-        title: `${title}\n↗ Mở trên ${source.label}`,
-        externalUrl: url,
-      });
+    // Nothing playable came out of the embed — hand over the publisher's own
+    // player page as a link rather than asking Stremio to play markup.
+    if (!url) {
+      out.push({ name, title: `${title}\n↗ Mở trên ${source.label}`, externalUrl: embed });
       continue;
     }
 
     out.push({
-      name: `${source.label}${warn}\n${server.name}`,
-      title,
+      name,
+      title: direct ? title : `${title}\n⟳ Lấy link lúc bấm phát`,
       url,
       behaviorHints: {
-        notWebReady: !picked.episode.m3u8,
+        notWebReady: !/[.]m3u8([?]|$)/i.test(url),
         bingeGroup: `${source.id}-${entry.slug}-${server.name}`,
       },
     });
@@ -290,7 +299,7 @@ async function hh3dStream(target, parsed, dbg) {
   ];
 }
 
-export async function getStreams(type, rawId) {
+export async function getStreams(type, rawId, { baseUrl = '' } = {}) {
   const parsed = parseId(type, rawId);
   if (!parsed) return { streams: [] };
 
@@ -313,7 +322,7 @@ export async function getStreams(type, rawId) {
   };
 
   const jobs = apiSources().map((source) =>
-    guard(source.id, (dbg) => streamsFrom(source, target, parsed, wantType, dbg)),
+    guard(source.id, (dbg) => streamsFrom(source, target, parsed, wantType, dbg, baseUrl)),
   );
 
   if (wantType === 'series') {

@@ -2,6 +2,7 @@ import { CONFIG } from './config.js';
 import { MANIFEST } from './manifest.js';
 import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
+import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
 
 /**
  * Hit every nguonc endpoint from this process's own IP and report the raw
@@ -110,7 +111,7 @@ export async function handleRequest(req, res) {
     const m = /^\/stream\/(movie|series)\/(.+?)(?:\.json)?$/.exec(path);
     if (m) {
       const [, type, id] = m;
-      const { streams } = await getStreams(type, id);
+      const { streams } = await getStreams(type, id, { baseUrl: baseUrlOf(req) });
       return send(res, 200, { streams, cacheMaxAge: 600 }, { edge: true });
     }
 
@@ -118,7 +119,52 @@ export async function handleRequest(req, res) {
     const d = /^\/debug\/(movie|series)\/(.+?)(?:\.json)?$/.exec(path);
     if (d) {
       const [, type, id] = d;
-      return send(res, 200, await getStreams(type, id));
+      return send(res, 200, await getStreams(type, id, { baseUrl: baseUrlOf(req) }));
+    }
+
+    /**
+     * /resolve?u=<embed url> — the embed link, made playable.
+     *
+     * Stremio cannot run a player page, so the page is turned into a media URL
+     * here and handed over as a redirect. Doing it at play time rather than
+     * while building the stream list means one fetch per click instead of one
+     * per server, and a short-lived token is fetched while it is still valid.
+     */
+    if (path === '/resolve') {
+      const u = url?.searchParams?.get('u') || '';
+      if (!u || !embedFetchable(u)) {
+        return send(res, 400, { err: 'embed host không nằm trong EMBED_HOSTS', embed: u || null });
+      }
+      const hit = await resolveEmbed(u);
+      if (!hit) return send(res, 502, { err: 'trang embed không công bố link phát', embed: u });
+      res.writeHead(302, {
+        ...CORS,
+        location: hit.url,
+        'cache-control': 'public, max-age=0, s-maxage=120',
+      });
+      return res.end();
+    }
+
+    // /probe/embed?u=<embed url> — why a given embed can or cannot be played
+    // inside Stremio: what the query string carries, what the page declares,
+    // and whether the track that comes out is a manifest Stremio can read.
+    if (path === '/probe/embed') {
+      const u = url?.searchParams?.get('u') || '';
+      if (!u) return send(res, 400, { err: 'thiếu ?u=<embed url>' });
+      const hit = await resolveEmbed(u);
+      const media = hit ? await inspectMedia(hit.url) : null;
+      return send(res, 200, {
+        embed: u,
+        fromQuery: unwrapEmbed(u),
+        hostAllowed: embedFetchable(u),
+        resolved: hit,
+        media,
+        verdict: media?.playable
+          ? 'phát được trong Stremio'
+          : hit
+            ? `có link nhưng không phát được (${media?.kind})`
+            : 'trang embed không công bố link phát → chỉ mở link ngoài',
+      });
     }
 
     // /probe/nguonc — run FROM this deployment's IP and report each nguonc

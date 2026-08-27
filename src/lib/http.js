@@ -45,13 +45,15 @@ export async function getJson(url, opts = {}) {
 }
 
 export async function getText(url, opts = {}) {
-  return cached(`text:${url}`, () =>
+  const fetchIt = () =>
     withRetry(async () => {
       const res = await raw(url, opts);
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
       return { body: await res.text(), finalUrl: res.url };
-    }),
-  );
+    });
+  // Player pages hand out short-lived tokens, so `fresh` keeps them out of the
+  // 30-minute cache: a resolved track is never older than its own lifetime.
+  return opts.fresh ? fetchIt() : cached(`text:${url}`, fetchIt);
 }
 
 /**
