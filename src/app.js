@@ -26,7 +26,16 @@ async function tryRoute(url) {
     } catch {
       usable = false;
     }
-    return { status: res.status, usable, ms: Date.now() - started };
+    return {
+      status: res.status,
+      usable,
+      ms: Date.now() - started,
+      // Ai từ chối: relay của mình, hay biên Cloudflare đứng trước nó? Hai bên
+      // cùng trả 403 nên status không phân biệt được — nội dung thì có.
+      server: res.headers.get('server'),
+      cfRay: res.headers.get('cf-ray'),
+      snippet: usable ? undefined : text.slice(0, 200),
+    };
   } catch (err) {
     return { status: null, usable: false, ms: Date.now() - started, error: err.message };
   }
