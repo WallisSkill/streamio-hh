@@ -1,0 +1,13 @@
+name = "stremio-vn-addon"
+main = "worker/index.js"
+compatibility_date = "2026-08-01"
+
+# nodejs_compat cho `process.env`, thứ CONFIG đọc lúc khởi tạo. Không có nó thì
+# mọi biến môi trường đều undefined và addon chạy bằng giá trị mặc định.
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Nguồn C không cần NGUONC_PROXY hay NGUONC_UPSTREAM ở đây: request đi ra mang
+# IP của người xem, và nguonc nhận IP dân cư. Đặt vào chỉ tổ thêm một chặng hỏng.
+# ENABLE_HH3D = "0"   # Workers không có curl, HH3D chỉ còn phần ghim tay
+# OVERRIDES = '{"tt0388629":{"kkphim":"dao-hai-tac"}}'

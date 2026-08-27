@@ -5,3 +5,7 @@ node_modules/
 # Tài liệu tham khảo bên thứ ba, không phải module của addon
 src/handlers/player*.js
 !src/handlers/stream.js
+
+# wrangler
+.wrangler/
+.wrangler-dryrun/

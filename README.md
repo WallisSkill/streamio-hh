@@ -89,24 +89,62 @@ Trong khi đó `proxy.cors.sh` lại gọi được nguonc, nên nguonc chặn t
 không chặn mọi IP datacenter. Đừng tin một relay chỉ vì nó chạy từ máy bạn:
 **thử từ chính deployment** bằng `/probe/nguonc` rồi hãy kết luận.
 
-### Worker của riêng bạn
+### Chạy addon trên Cloudflare Workers
 
-[`worker/nguonc-relay.js`](worker/nguonc-relay.js) là bản relay 40 dòng chạy
-trên Cloudflare Workers — miễn phí, do bạn kiểm soát, không phụ thuộc bên thứ
-ba nào. Nó chỉ chuyển tiếp `GET` tới `phim.nguonc.com`; bỏ dòng chặn đó đi thì
-nó thành open proxy.
+Cách gọn nhất để có Nguồn C mà không cần thiết bị nào ở nhà — và nó đến từ
+chính cơ chế đã làm hỏng mọi đường vòng phía trên.
 
-1. `dash.cloudflare.com` → Workers & Pages → Create → Start with Hello World
-2. Edit code → dán nội dung file → Deploy
-3. Thử thẳng trên trình duyệt, phải ra JSON có `"status":"success"`:
-   `https://<tên>.<tài-khoản>.workers.dev/?url=https%3A%2F%2Fphim.nguonc.com%2Fapi%2Ffilm%2Fdai-chua-te`
-4. Vercel → Settings → Environment Variables:
-   `NGUONC_PROXY=https://<tên>.<tài-khoản>.workers.dev/?url={url}`
-5. Redeploy, rồi mở `/probe/nguonc` xem `routes.verdict`
+Worker gọi sang một site cũng nằm sau Cloudflare thì request không rời mạng
+Cloudflare, và bên nhận xét tường lửa theo **IP của người dùng gốc**. Worker
+chuyển tiếp IP chứ không giấu nó — nên relay đặt trên Cloudflare vô dụng khi
+người gọi là Vercel.
 
-Bước 3 là bước quyết định: ra JSON nghĩa là nguonc nhận dải IP của Cloudflare
-Workers; ra trang HTML của Cloudflare nghĩa là dải đó cũng bị chặn và chỉ còn
-đường IP dân cư thật (`NGUONC_UPSTREAM`).
+Nhưng đặt luôn addon ở đó thì người gọi là Stremio trên máy người xem, tức một
+IP dân cư, và nguonc cho qua. Đã kiểm chứng: `IP nhà → Worker → nguonc` trả
+`200`, trong khi `Vercel → Worker → nguonc` trả `403`, cùng một Worker.
+
+```bash
+npm run deploy:worker    # npx wrangler deploy
+```
+
+Lần đầu wrangler sẽ mở trình duyệt để đăng nhập Cloudflare. Xong thì lấy URL nó
+in ra, thêm `/manifest.json`, dán vào Stremio.
+
+Ở đây **không đặt** `NGUONC_PROXY` hay `NGUONC_UPSTREAM` — đặt vào chỉ thêm một
+chặng hỏng, vì đường gọi thẳng đã đi được. Khác biệt so với Vercel:
+
+- Nguồn C chỉ chạy cho người xem có IP dân cư; xem qua VPN đặt ở datacenter thì
+  nguồn này lại tắt
+- HH3D mất phần tự dò slug (không có `curl`), giống hệt trên Vercel
+- `overrides.json` không đọc được vì không có hệ thống tệp — nạp qua biến
+  `OVERRIDES` chứa chuỗi JSON, xem [`wrangler.toml`](wrangler.toml)
+
+Router dùng chung: [`src/lib/fetchAdapter.js`](src/lib/fetchAdapter.js) chuyển
+`Request` thành cặp `(req, res)` mà `app.js` vốn nói, nên cùng một bộ định
+tuyến chạy cả trên node:http, Vercel lẫn Workers.
+
+### Worker chỉ để chuyển tiếp API
+
+[`worker/nguonc-relay.js`](worker/nguonc-relay.js) là bản relay 40 dòng, chỉ
+chuyển tiếp `GET` tới `phim.nguonc.com` (bỏ dòng chặn đó đi thì nó thành open
+proxy). Giữ lại vì nó **hữu ích khi người gọi có IP dân cư**, và vì nó là bằng
+chứng cho kết luận ở trên.
+
+**Nó KHÔNG cứu được bản chạy trên Vercel.** Đã đo, cùng một Worker cùng một URL:
+
+| Người gọi | Kết quả |
+|---|---|
+| Máy nhà | `200`, JSON đầy đủ |
+| Vercel | `403`, kèm nguyên trang chặn của nguonc |
+
+Worker có chạy — nó gọi nguonc, nguonc từ chối, nó trả nguyên văn về (thân
+phản hồi là HTML của Cloudflare chứ không phải dòng chặn của chính relay). Lý
+do: request từ Worker sang một site Cloudflare khác được xét theo IP người gọi
+gốc. Nên relay đặt trên Cloudflare **chuyển tiếp** IP của Vercel chứ không giấu
+nó, và `sc.k-20.xyz` cũng hỏng y hệt vì cùng lẽ đó.
+
+Muốn Nguồn C mà không có thiết bị ở nhà thì chuyển hẳn addon lên Workers, xem
+mục trên.
 
 Bản chạy ở nhà cần một địa chỉ công khai. Nhanh nhất:
 
