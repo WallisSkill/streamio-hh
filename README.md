@@ -236,7 +236,7 @@ Trả về nguồn đã chọn, điểm khớp, lý do khớp và chế độ đ
 | Nguồn | Phát trong Stremio | Ghi chú |
 |---|---|---|
 | **KKPhim** (phimapi.com) | Có, m3u8 trực tiếp | Nhiều server: Vietsub / Thuyết Minh / Lồng Tiếng. Tập chỉ có `link_embed` cũng phát được — xem phần link embed bên dưới |
-| **Ophim** (ophim1.com) | Có, m3u8 trực tiếp | Có `imdb.id` + `tmdb.season` cho cả donghua nên khớp ID chính xác hơn |
+| **Ophim** (ophim1.com) | **Đang hỏng, tắt mặc định trên Workers** | API trả 404 ở mọi path (đo 28/08/2026), không mirror nào còn sống. Bật lại bằng `ENABLE_OPHIM=1` khi nó hồi phục |
 | **Nguồn C** (phim.nguonc.com) | Có, qua `STREAMC_PROXY` | [API mở](https://phim.nguonc.com/api-document), không cần key. Playlist về ở dạng mã hoá nên phải đi vòng — xem giải thích bên dưới |
 | **HH3D** (hoathinh3d) | Không — chỉ link mở trang | Xem giải thích bên dưới |
 

@@ -6,8 +6,19 @@ compatibility_date = "2026-08-01"
 # mọi biến môi trường đều undefined và addon chạy bằng giá trị mặc định.
 compatibility_flags = ["nodejs_compat"]
 
+# CẢNH BÁO: `wrangler deploy` GHI ĐÈ toàn bộ biến của Worker bằng đúng khối
+# [vars] dưới đây. Biến thêm tay trong dashboard sẽ biến mất ở lần deploy sau,
+# nên khai ở đây mới là chỗ giữ được — file này nằm trong git, dashboard thì không.
 [vars]
+# Hai nguồn này đang hỏng và không tạo ra stream nào, nhưng vẫn bắt mọi request
+# chờ chúng. Đo 28/08/2026: ophim ~5.5s, hh3d ~2.5s mỗi request chưa cache.
+# ophim1.com trả 404 ở mọi path API, và không mirror nào còn sống (ophim.cc trả
+# trang chống bot, ophim9/13/16 timeout hoặc không phân giải được tên miền).
+ENABLE_OPHIM = "0"
+# Workers không có tiến trình con nên không chạy được curl, phần tự dò slug của
+# HH3D tắt vĩnh viễn ở đây; chỉ còn slug ghim tay trong overrides.json.
+ENABLE_HH3D = "0"
+
 # Nguồn C không cần NGUONC_PROXY hay NGUONC_UPSTREAM ở đây: request đi ra mang
 # IP của người xem, và nguonc nhận IP dân cư. Đặt vào chỉ tổ thêm một chặng hỏng.
-# ENABLE_HH3D = "0"   # Workers không có curl, HH3D chỉ còn phần ghim tay
 # OVERRIDES = '{"tt0388629":{"kkphim":"dao-hai-tac"}}'
