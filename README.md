@@ -83,6 +83,31 @@ chặn của Cloudflare, nên addon soi hình dạng dữ liệu chứ không ti
 các nguồn khác không ảnh hưởng. Cả hai biến để rỗng thì Nguồn C tự tắt trên
 serverless như trước.
 
+**Đo được (28/08/2026):** `sc.k-20.xyz` trả `200` cho máy ở nhà nhưng `403`
+cho Vercel ở cùng một URL — họ cho proxy video, không cho mượn IP gọi API.
+Trong khi đó `proxy.cors.sh` lại gọi được nguonc, nên nguonc chặn theo dải chứ
+không chặn mọi IP datacenter. Đừng tin một relay chỉ vì nó chạy từ máy bạn:
+**thử từ chính deployment** bằng `/probe/nguonc` rồi hãy kết luận.
+
+### Worker của riêng bạn
+
+[`worker/nguonc-relay.js`](worker/nguonc-relay.js) là bản relay 40 dòng chạy
+trên Cloudflare Workers — miễn phí, do bạn kiểm soát, không phụ thuộc bên thứ
+ba nào. Nó chỉ chuyển tiếp `GET` tới `phim.nguonc.com`; bỏ dòng chặn đó đi thì
+nó thành open proxy.
+
+1. `dash.cloudflare.com` → Workers & Pages → Create → Start with Hello World
+2. Edit code → dán nội dung file → Deploy
+3. Thử thẳng trên trình duyệt, phải ra JSON có `"status":"success"`:
+   `https://<tên>.<tài-khoản>.workers.dev/?url=https%3A%2F%2Fphim.nguonc.com%2Fapi%2Ffilm%2Fdai-chua-te`
+4. Vercel → Settings → Environment Variables:
+   `NGUONC_PROXY=https://<tên>.<tài-khoản>.workers.dev/?url={url}`
+5. Redeploy, rồi mở `/probe/nguonc` xem `routes.verdict`
+
+Bước 3 là bước quyết định: ra JSON nghĩa là nguonc nhận dải IP của Cloudflare
+Workers; ra trang HTML của Cloudflare nghĩa là dải đó cũng bị chặn và chỉ còn
+đường IP dân cư thật (`NGUONC_UPSTREAM`).
+
 Bản chạy ở nhà cần một địa chỉ công khai. Nhanh nhất:
 
 ```bash
