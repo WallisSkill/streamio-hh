@@ -142,34 +142,60 @@ function pickEntry(scored, season) {
   return pool.find((s) => s.candidate.season == null) || pool[0];
 }
 
-/** Find the entry on a source that matches the show + season. */
-async function locateEntry(source, target, parsed, wantType, dbg) {
+/**
+ * The entries worth trying on a source, best first.
+ *
+ * One pick is not enough, because whether an entry can serve the requested
+ * episode is only knowable after its episode list is fetched. Nguồn C carries
+ * Swallowed Star as both a 26-episode season 1 and a 212-episode merged entry,
+ * and the exact title belongs to the short one — so S4E56 has to be allowed to
+ * fall through to the entry behind it instead of coming back empty.
+ */
+async function shortlistFor(source, target, parsed, wantType, limit = 3) {
   const pin = target.override?.[source.id];
-  if (pin) {
-    const entry = await source.detail(pin);
-    if (entry) {
-      dbg.picked = { slug: pin, via: 'override' };
-      return entry;
-    }
-  }
+  if (pin) return [{ candidate: { slug: pin }, via: 'override' }];
+
   const candidates = await gatherFrom(source, target, parsed.season);
   const scored = filterCandidates(candidates, target, wantType);
   const best = pickEntry(scored, parsed.season);
-  if (!best) return null;
-  dbg.picked = {
-    slug: best.candidate.slug,
-    score: best.score,
-    reasons: best.reasons,
-    season: best.candidate.season,
-  };
-  return source.detail(best.candidate.slug);
+  if (!best) return [];
+  return [best, ...scored.filter((s) => s !== best)].slice(0, limit);
 }
 
-/** Resolve one API source into playable streams. */
+/**
+ * Resolve one API source into playable streams.
+ * The extra detail() calls only happen on the path that used to return
+ * nothing, so a source that matches on its first pick costs exactly as before.
+ */
 async function streamsFrom(source, target, parsed, wantType, dbg, baseUrl) {
-  const entry = await locateEntry(source, target, parsed, wantType, dbg);
-  if (!entry) return [];
+  const tried = [];
 
+  for (const pick of await shortlistFor(source, target, parsed, wantType)) {
+    const entry = await source.detail(pick.candidate.slug);
+    if (!entry) continue;
+
+    dbg.picked = {
+      slug: pick.candidate.slug,
+      via: pick.via,
+      score: pick.score,
+      reasons: pick.reasons,
+      season: pick.candidate.season,
+    };
+
+    const out = streamsFromEntry(entry, source, target, parsed, wantType, dbg, baseUrl);
+    if (out.length) {
+      if (tried.length) dbg.tried = tried;
+      return out;
+    }
+    tried.push({ slug: pick.candidate.slug, why: dbg.decision?.note || 'không có tập nào khớp' });
+  }
+
+  if (tried.length) dbg.tried = tried;
+  return [];
+}
+
+/** Build the stream list out of one entry whose episodes are already loaded. */
+function streamsFromEntry(entry, source, target, parsed, wantType, dbg, baseUrl) {
   const out = [];
   for (const server of entry.servers) {
     if (!server.episodes.length) continue;
