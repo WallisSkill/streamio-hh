@@ -23,6 +23,9 @@ const nguoncUpstream = (env.NGUONC_UPSTREAM || '').replace(/[/]+$/, '');
 //   NGUONC_PROXY=https://sc.k-20.xyz/proxy-segment.ts?url={url}&referer=https%3A%2F%2Fphim.nguonc.com%2F
 const nguoncProxyRaw = env.NGUONC_PROXY || '';
 const nguoncProxy = nguoncProxyRaw.includes('{url}') ? nguoncProxyRaw : '';
+// Đặt biến nhưng quên {url} là lỗi im lặng khó thấy nhất trong đám này:
+// Nguồn C tắt mà không có dòng log nào. /probe/nguonc nói ra chuyện đó.
+const nguoncProxyIgnored = Boolean(nguoncProxyRaw) && !nguoncProxy;
 
 export const CONFIG = {
   port: Number(env.PORT || 7000),
@@ -34,6 +37,7 @@ export const CONFIG = {
   nguoncApi,
   nguoncUpstream,
   nguoncProxy,
+  nguoncProxyIgnored,
   hh3dBase: (env.HH3D_BASE || 'https://hoathinh3d.so').replace(/\/+$/, ''),
   enableOphim: bool(env.ENABLE_OPHIM, true),
   enableNguonc: bool(env.ENABLE_NGUONC, !onServerless || Boolean(nguoncUpstream || nguoncProxy)),

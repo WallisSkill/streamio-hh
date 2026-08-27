@@ -3,6 +3,79 @@ import { MANIFEST } from './manifest.js';
 import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
 import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
+import { routesTo } from './sources/nguonc.js';
+
+/**
+ * Try one route to nguonc and say whether real data came back.
+ *
+ * Status alone does not settle it: a blocked proxy answers 200 and hands over
+ * Cloudflare's challenge page, which parses as neither failure nor film list.
+ */
+async function tryRoute(url) {
+  const started = Date.now();
+  try {
+    const res = await fetch(url, {
+      headers: { 'user-agent': CONFIG.userAgent, accept: 'application/json, */*' },
+      signal: AbortSignal.timeout(CONFIG.httpTimeout),
+    });
+    const text = await res.text();
+    let usable = false;
+    try {
+      const data = JSON.parse(text);
+      usable = data?.status === 'success' || Boolean(data?.items || data?.movie);
+    } catch {
+      usable = false;
+    }
+    return { status: res.status, usable, ms: Date.now() - started };
+  } catch (err) {
+    return { status: null, usable: false, ms: Date.now() - started, error: err.message };
+  }
+}
+
+/**
+ * Which routes to nguonc this deployment is configured with, and which of them
+ * actually answer — the question every NGUONC_UPSTREAM / NGUONC_PROXY problem
+ * comes down to. Env vars are set in a dashboard far from here and take effect
+ * only on redeploy, so guessing from the outside is hopeless; this says it.
+ */
+async function probeNguoncRoutes() {
+  const labels = [];
+  if (CONFIG.nguoncUpstream) labels.push('upstream');
+  if (CONFIG.nguoncProxy) labels.push('proxy');
+  labels.push('direct');
+
+  const urls = routesTo(`/api/films/search?keyword=${encodeURIComponent('dai chua te')}`);
+  const host = (u) => {
+    try {
+      return new URL(u).host;
+    } catch {
+      return null;
+    }
+  };
+
+  const tried = await Promise.all(
+    urls.map(async (url, i) => ({ via: labels[i], host: host(url), ...(await tryRoute(url)) })),
+  );
+
+  return {
+    enabled: CONFIG.enableNguonc,
+    upstream: CONFIG.nguoncUpstream || null,
+    proxy: CONFIG.nguoncProxy ? host(CONFIG.nguoncProxy.replace('{url}', 'x')) : null,
+    // Set but thrown away for want of {url}: the one failure with no symptom.
+    proxyIgnored: CONFIG.nguoncProxyIgnored,
+    tried,
+    // Nguồn tắt thì mọi đường có thông cũng vô nghĩa, nên xét trước.
+    verdict: !CONFIG.enableNguonc
+      ? CONFIG.nguoncProxyIgnored
+        ? 'Nguồn C đang TẮT — NGUONC_PROXY có đặt nhưng thiếu {url} nên bị bỏ qua'
+        : 'Nguồn C đang TẮT — chưa đặt NGUONC_PROXY / NGUONC_UPSTREAM / ENABLE_NGUONC'
+      : CONFIG.nguoncProxyIgnored
+        ? 'NGUONC_PROXY có đặt nhưng thiếu {url} nên bị bỏ qua'
+        : tried.some((t) => t.usable)
+          ? `đi được qua: ${tried.filter((t) => t.usable).map((t) => t.via).join(', ')}`
+          : 'không đường nào tới được nguonc — Nguồn C sẽ không có stream',
+  };
+}
 
 /**
  * Hit every nguonc endpoint from this process's own IP and report the raw
@@ -28,7 +101,7 @@ async function probeNguonc(keyword) {
   const verdict = Object.fromEntries(
     Object.entries(results).map(([k, v]) => [k, v.ok ? `OK ${v.status}` : `BLOCKED ${v.status ?? v.error}`]),
   );
-  return { keyword, from: 'this-deployment-ip', verdict, detail: results };
+  return { keyword, from: 'this-deployment-ip', verdict, routes: await probeNguoncRoutes(), detail: results };
 }
 
 const CORS = {

@@ -166,7 +166,7 @@ function getEpisodeM3u8(ep) {
  * sang đường sau. Máy chạy ở nhà không đặt biến nào thì danh sách chỉ có
  * đúng đường gọi thẳng, y như trước.
  */
-function routesTo(path) {
+export function routesTo(path) {
   const direct = `${CONFIG.nguoncApi}${path}`;
   const routes = [];
 
