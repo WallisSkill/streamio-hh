@@ -1,4 +1,4 @@
-import { baseTitle, similarity, normalize } from './text.js';
+import { baseTitle, titleHead, similarity, normalize } from './text.js';
 
 /** KKPhim `type` -> stremio type. `single` is a standalone film, everything else is episodic. */
 export function typeGroup(candidate) {
@@ -41,6 +41,26 @@ export function scoreCandidate(candidate, target) {
   if (best > 0) {
     score += Math.round(best * 40);
     if (!exactBase) reasons.push(`title-sim:${best.toFixed(2)}`);
+  }
+
+  // Same name, different subtitle: "Soul Land 2: The Peerless Tang Clan" on
+  // IMDb against "Soul Land 2: The Peerless Tang Sect" on the source. The two
+  // score 0.86 similar, which lands under the cut — while the part in front of
+  // the colon is identical. Worth less than a whole-title match so an entry
+  // that agrees all the way through still wins.
+  if (!exactBase) {
+    const headMatch = candTitles.some((ct) =>
+      targetTitles.some((tt) => {
+        const ch = titleHead(ct);
+        const th = titleHead(tt);
+        if (!ch && !th) return false;
+        return (ch && th && ch === th) || (ch && ch === baseTitle(tt)) || (th && th === baseTitle(ct));
+      }),
+    );
+    if (headMatch) {
+      score += 40;
+      reasons.push('title-head');
+    }
   }
 
   if (target.year && candidate.year) {

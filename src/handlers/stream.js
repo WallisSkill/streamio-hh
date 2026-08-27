@@ -6,7 +6,7 @@ import * as hh3d from '../sources/hh3d.js';
 import { getCinemeta, buildEpisodeIndex, getAliases, getKitsuMeta } from '../lib/meta.js';
 import { filterCandidates } from '../lib/match.js';
 import { resolveEpisode } from '../lib/episodeMap.js';
-import { baseTitle } from '../lib/text.js';
+import { baseTitle, titleHead } from '../lib/text.js';
 import { getOverride } from '../lib/overrides.js';
 import { unwrapEmbed, embedFetchable } from '../lib/embed.js';
 
@@ -89,6 +89,9 @@ function buildQueries(target, season) {
     if (!t) continue;
     q.add(t);
     q.add(baseTitle(t));
+    // Subtitles are where translations disagree, so the name in front of the
+    // colon is the part a VN site is most likely to have written the same way.
+    q.add(titleHead(t));
   }
   if (season && season > 1) {
     for (const t of target.titles.slice(0, 3)) {

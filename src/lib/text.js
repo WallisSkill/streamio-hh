@@ -55,6 +55,24 @@ export function baseTitle(title) {
 }
 
 /**
+ * The name a title carries before its subtitle:
+ * "Soul Land 2: The Peerless Tang Clan" -> "soul land 2".
+ *
+ * Two translations of one show agree on the name and drift apart on the
+ * subtitle — IMDb writes "Tang Clan" where the source writes "Tang Sect" — and
+ * that drift alone is enough to push a real match under the score threshold.
+ * The season number stays: it is what separates the show from its own seasons.
+ *
+ * Empty when the title has no subtitle, so callers can tell the two cases
+ * apart instead of comparing a name against itself.
+ */
+export function titleHead(title) {
+  const head = baseTitle(String(title ?? '').split(/[:：]/)[0]);
+  if (!head || head.length < 3) return '';
+  return head === baseTitle(title) ? '' : head;
+}
+
+/**
  * Parse an episode number out of a source label.
  * Handles "Tập 01", "Tap 12", "12", "Episode 5", "12-13" (takes first), "Full".
  * Returns { num, isFull, isSpecial }.
