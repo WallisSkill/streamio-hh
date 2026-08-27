@@ -15,19 +15,28 @@ const nguoncApi = (env.NGUONC_API || 'https://phim.nguonc.com').replace(/[/]+$/,
 // pages and the stream itself stay direct (both already answer datacenter IPs).
 const nguoncUpstream = (env.NGUONC_UPSTREAM || '').replace(/[/]+$/, '');
 
+// A public URL fetcher to fall back on, as a template holding {url}. Tried
+// after the upstream, so Nguồn C survives the home instance being switched off
+// — and swapping to a different fetcher later is one env var, not a code edit.
+// Ignored unless it carries the placeholder, otherwise every call would fetch
+// the same page. Example:
+//   NGUONC_PROXY=https://sc.k-20.xyz/proxy-segment.ts?url={url}&referer=https%3A%2F%2Fphim.nguonc.com%2F
+const nguoncProxyRaw = env.NGUONC_PROXY || '';
+const nguoncProxy = nguoncProxyRaw.includes('{url}') ? nguoncProxyRaw : '';
+
 export const CONFIG = {
   port: Number(env.PORT || 7000),
   baseUrl: env.ADDON_BASE_URL || '',
   kkphimApi: (env.KKPHIM_API || 'https://phimapi.com').replace(/\/+$/, ''),
   ophimApi: (env.OPHIM_API || 'https://ophim1.com').replace(/[/]+$/, ''),
+  // /probe/nguonc keeps calling nguoncApi directly, so it still reports whether
+  // THIS deployment's own IP is blocked, whatever the routes below do.
   nguoncApi,
   nguoncUpstream,
-  // Where the nguonc source actually sends its calls. /probe/nguonc keeps using
-  // nguoncApi directly, so it still reports whether THIS IP is blocked.
-  nguoncBase: nguoncUpstream ? `${nguoncUpstream}/upstream/nguonc` : nguoncApi,
+  nguoncProxy,
   hh3dBase: (env.HH3D_BASE || 'https://hoathinh3d.so').replace(/\/+$/, ''),
   enableOphim: bool(env.ENABLE_OPHIM, true),
-  enableNguonc: bool(env.ENABLE_NGUONC, !onServerless || Boolean(nguoncUpstream)),
+  enableNguonc: bool(env.ENABLE_NGUONC, !onServerless || Boolean(nguoncUpstream || nguoncProxy)),
   enableKkphim: bool(env.ENABLE_KKPHIM, true),
   enableHh3d: bool(env.ENABLE_HH3D, true),
   // Embed pages: turn them into a playable track when they publish one.

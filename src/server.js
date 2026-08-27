@@ -15,7 +15,13 @@ http.createServer(handleRequest).listen(CONFIG.port, () => {
     console.log(
       `[addon] nguonc streamc=${CONFIG.streamcProxy || '(tắt)'}` +
         ` stremio=${CONFIG.stremioProxy || '(tắt)'}` +
-        ` api=${CONFIG.nguoncUpstream ? `qua ${CONFIG.nguoncUpstream}` : 'trực tiếp'}`,
+        ` api=${[
+          CONFIG.nguoncUpstream && `upstream ${CONFIG.nguoncUpstream}`,
+          CONFIG.nguoncProxy && `proxy ${new URL(CONFIG.nguoncProxy.replace('{url}', 'x')).host}`,
+          'trực tiếp',
+        ]
+          .filter(Boolean)
+          .join(' → ')}`,
     );
   }
 });

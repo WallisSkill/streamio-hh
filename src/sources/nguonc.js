@@ -156,6 +156,50 @@ function getEpisodeM3u8(ep) {
 }
 
 /**
+ * Mọi đường đi tới nguonc, tốt nhất trước.
+ *
+ * Cloudflare của nguonc chặn IP datacenter, nên bản chạy serverless phải mượn
+ * một IP đi được. Thứ tự: upstream của chính bạn trước (bạn kiểm soát được),
+ * rồi tới proxy công cộng, cuối cùng là gọi thẳng.
+ *
+ * Có bước lùi này thì máy nhà tắt không làm mất hẳn Nguồn C — chỉ chuyển
+ * sang đường sau. Máy chạy ở nhà không đặt biến nào thì danh sách chỉ có
+ * đúng đường gọi thẳng, y như trước.
+ */
+function routesTo(path) {
+  const direct = `${CONFIG.nguoncApi}${path}`;
+  const routes = [];
+
+  if (CONFIG.nguoncUpstream) {
+    routes.push(`${CONFIG.nguoncUpstream}/upstream/nguonc${path}`);
+  }
+  if (CONFIG.nguoncProxy) {
+    routes.push(CONFIG.nguoncProxy.replace('{url}', encodeURIComponent(direct)));
+  }
+  routes.push(direct);
+
+  return routes;
+}
+
+/**
+ * Gọi nguonc qua đường nào trả lời được.
+ *
+ * Một proxy bị chặn vẫn có thể trả 200 kèm trang chặn của Cloudflare, nên
+ * phải soi hình dạng dữ liệu chứ không tin mỗi status code.
+ */
+async function getNguonc(path, label) {
+  for (const url of routesTo(path)) {
+    const data = await safe(getJson(url), label);
+
+    if (data?.status === 'success' || data?.items || data?.movie) {
+      return data;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Search phim.
  */
 export async function search(keyword) {
@@ -163,12 +207,8 @@ export async function search(keyword) {
     return [];
   }
 
-  const url =
-    `${CONFIG.nguoncBase}/api/films/search` +
-    `?keyword=${encodeURIComponent(keyword)}`;
-
-  const data = await safe(
-    getJson(url),
+  const data = await getNguonc(
+    `/api/films/search?keyword=${encodeURIComponent(keyword)}`,
     'nguonc-search',
   );
 
@@ -187,10 +227,8 @@ export async function detail(slug) {
   return cached(
     `nguonc:detail:${slug}`,
     async () => {
-      const data = await safe(
-        getJson(
-          `${CONFIG.nguoncBase}/api/film/${slug}`,
-        ),
+      const data = await getNguonc(
+        `/api/film/${slug}`,
         'nguonc-detail',
       );
 

@@ -67,6 +67,22 @@ chỉ chuyển tiếp `GET /api/...` của nguonc — không phải proxy mở.
 Chỉ có dữ liệu API đi đường này; video vẫn đi thẳng từ máy người xem tới
 `sc.k-20.xyz`, không qua nhà bạn và cũng không qua Vercel.
 
+Máy ở nhà tắt thì còn một đường lùi nữa, `NGUONC_PROXY` — một mẫu URL chứa
+`{url}`, thử sau upstream:
+
+```
+NGUONC_PROXY=https://sc.k-20.xyz/proxy-segment.ts?url={url}&referer=https%3A%2F%2Fphim.nguonc.com%2F
+```
+
+Thứ tự đầy đủ là **upstream → proxy → gọi thẳng**, đường nào trả về dữ liệu
+đúng hình dạng thì dừng ở đó. Một proxy bị chặn vẫn có thể trả 200 kèm trang
+chặn của Cloudflare, nên addon soi hình dạng dữ liệu chứ không tin status code.
+
+Đây là hạ tầng của người khác, dùng cho việc không phải của nó — họ chặn hoặc
+đổi tham số lúc nào cũng được. Nên coi là tạm bợ: mất nó thì Nguồn C biến mất,
+các nguồn khác không ảnh hưởng. Cả hai biến để rỗng thì Nguồn C tự tắt trên
+serverless như trước.
+
 Bản chạy ở nhà cần một địa chỉ công khai. Nhanh nhất:
 
 ```bash
