@@ -14,7 +14,8 @@ http.createServer(handleRequest).listen(CONFIG.port, () => {
   if (CONFIG.enableNguonc) {
     console.log(
       `[addon] nguonc streamc=${CONFIG.streamcProxy || '(tắt)'}` +
-        ` stremio=${CONFIG.stremioProxy || '(tắt)'}`,
+        ` stremio=${CONFIG.stremioProxy || '(tắt)'}` +
+        ` api=${CONFIG.nguoncUpstream ? `qua ${CONFIG.nguoncUpstream}` : 'trực tiếp'}`,
     );
   }
 });

@@ -164,7 +164,7 @@ export async function search(keyword) {
   }
 
   const url =
-    `${CONFIG.nguoncApi}/api/films/search` +
+    `${CONFIG.nguoncBase}/api/films/search` +
     `?keyword=${encodeURIComponent(keyword)}`;
 
   const data = await safe(
@@ -189,7 +189,7 @@ export async function detail(slug) {
     async () => {
       const data = await safe(
         getJson(
-          `${CONFIG.nguoncApi}/api/film/${slug}`,
+          `${CONFIG.nguoncBase}/api/film/${slug}`,
         ),
         'nguonc-detail',
       );

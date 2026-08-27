@@ -36,7 +36,7 @@ khai biến môi trường nào; địa chỉ addon tự suy ra từ domain Verc
 
 Xong thì mở `https://<tên-app>.vercel.app` và bấm **Cài vào Stremio**.
 
-### Hai điều cần biết khi chạy serverless
+### Ba điều cần biết khi chạy serverless
 
 **Cache trong RAM mất mỗi lần cold start.** Bù lại, mọi phản hồi đều gắn
 `s-maxage=600`, nên CDN của Vercel trả thẳng cho lần bấm thứ hai mà không
@@ -45,6 +45,36 @@ gọi lại hàm. Lần đầu một tập mất khoảng 3–4 giây, sau đó 
 **Tự dò slug HH3D không chạy trên Vercel** vì runtime không có `curl`. Addon
 tự bỏ qua HH3D, các nguồn khác không ảnh hưởng. Muốn giữ link HH3D thì ghim
 slug trong `overrides.json` — cách đó vẫn chạy bình thường trên serverless.
+
+**Nguồn C bị chặn theo IP, và có cách đi vòng.** Cloudflare của nguonc trả
+403 cho IP datacenter ở mọi path, nên addon tự tắt nguồn này khi phát hiện
+đang chạy serverless. Kiểm bằng `/probe/nguonc` — chạy từ chính deployment
+và báo path nào bị chặn.
+
+Chỉ mỗi **API** bị chặn. Trang embed `*.streamc.xyz` và proxy `sc.k-20.xyz`
+vẫn trả lời IP datacenter bình thường (đã đo trên Vercel), nên chỉ cần đưa
+đúng phần API đi vòng:
+
+```
+NGUONC_UPSTREAM=https://<addon chạy ở nhà>
+```
+
+Bản trên Vercel sẽ gửi lệnh gọi nguonc tới `/upstream/nguonc/...` của bản
+chạy ở nhà, bản đó gọi nguonc bằng IP dân cư rồi trả kết quả về nguyên văn.
+Đặt biến này cũng tự bật lại Nguồn C trên serverless. Route `/upstream/nguonc`
+chỉ chuyển tiếp `GET /api/...` của nguonc — không phải proxy mở.
+
+Chỉ có dữ liệu API đi đường này; video vẫn đi thẳng từ máy người xem tới
+`sc.k-20.xyz`, không qua nhà bạn và cũng không qua Vercel.
+
+Bản chạy ở nhà cần một địa chỉ công khai. Nhanh nhất:
+
+```bash
+cloudflared tunnel --url http://localhost:7000
+```
+
+URL `trycloudflare` đổi mỗi lần khởi động lại, nên nếu định để lâu thì dùng
+named tunnel gắn domain của bạn để `NGUONC_UPSTREAM` khỏi phải sửa liên tục.
 
 ## Vấn đề số tập, và cách addon xử lý
 

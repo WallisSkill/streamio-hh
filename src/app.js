@@ -174,6 +174,47 @@ export async function handleRequest(req, res) {
       return send(res, 200, await probeNguonc(kw));
     }
 
+    /**
+     * /upstream/nguonc/<path> — nguonc, fetched from THIS machine's IP.
+     *
+     * Cloudflare answers 403 to datacenter IPs, so a deployment sitting in one
+     * borrows a residential one: it sets NGUONC_UPSTREAM to a home instance and
+     * its nguonc calls land here instead. Only nguonc's own read-only /api/
+     * paths are forwarded, and only GET — this must not become an open proxy.
+     *
+     * The response is passed through verbatim, status included, so the caller's
+     * own error handling sees what nguonc actually said.
+     */
+    if (path.startsWith('/upstream/nguonc/')) {
+      const rest = path.slice('/upstream/nguonc'.length);
+      if (req.method !== 'GET' || !rest.startsWith('/api/')) {
+        return send(res, 400, { err: 'chỉ chuyển tiếp GET /api/... của nguonc', path: rest });
+      }
+      const upstream = `${CONFIG.nguoncApi}${rest}${url?.search || ''}`;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), CONFIG.httpTimeout);
+      try {
+        const hit = await fetch(upstream, {
+          signal: ctrl.signal,
+          headers: {
+            'user-agent': CONFIG.userAgent,
+            accept: 'application/json, text/plain, */*',
+            referer: `${CONFIG.nguoncApi}/`,
+          },
+        });
+        const body = await hit.text();
+        res.writeHead(hit.status, {
+          ...CORS,
+          'cache-control': 'public, max-age=0, s-maxage=600, stale-while-revalidate=86400',
+        });
+        return res.end(body);
+      } catch (err) {
+        return send(res, 502, { err: err.message, upstream });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     return send(res, 404, { err: 'not found' });
   } catch (err) {
     console.error(err);
