@@ -1,3 +1,7 @@
 node_modules/
 .env
 *.log
+
+# Tài liệu tham khảo bên thứ ba, không phải module của addon
+src/handlers/player*.js
+!src/handlers/stream.js
