@@ -102,6 +102,14 @@ Sửa `overrides.json` (tự nạp lại sau ~5 giây, không cần restart):
 
 ## Kiểm tra
 
+Bộ giải link embed — chạy offline, không cần mạng, không cần server:
+
+```bash
+node test/embed.mjs
+```
+
+Khớp tập — cần addon đang chạy (`PORT=7010 npm start`):
+
 ```bash
 node test/regression.mjs
 ```
@@ -118,25 +126,92 @@ Trả về nguồn đã chọn, điểm khớp, lý do khớp và chế độ đ
 
 | Nguồn | Phát trong Stremio | Ghi chú |
 |---|---|---|
-| **KKPhim** (phimapi.com) | Có, m3u8 trực tiếp | Nhiều server: Vietsub / Thuyết Minh / Lồng Tiếng |
+| **KKPhim** (phimapi.com) | Có, m3u8 trực tiếp | Nhiều server: Vietsub / Thuyết Minh / Lồng Tiếng. Tập chỉ có `link_embed` cũng phát được — xem phần link embed bên dưới |
 | **Ophim** (ophim1.com) | Có, m3u8 trực tiếp | Có `imdb.id` + `tmdb.season` cho cả donghua nên khớp ID chính xác hơn |
-| **Nguồn C** (phim.nguonc.com) | Không — chỉ link mở trang | [API mở](https://phim.nguonc.com/api-document), không cần key. Xem giải thích bên dưới |
+| **Nguồn C** (phim.nguonc.com) | Có, qua `STREAMC_PROXY` | [API mở](https://phim.nguonc.com/api-document), không cần key. Playlist về ở dạng mã hoá nên phải đi vòng — xem giải thích bên dưới |
 | **HH3D** (hoathinh3d) | Không — chỉ link mở trang | Xem giải thích bên dưới |
 
 Cả KKPhim và Ophim đều là API JSON công khai, trả `link_m3u8` cho request ẩn
 danh, không cần token. Mỗi server của mỗi nguồn là một lựa chọn riêng trong
 Stremio.
 
-### Vì sao Nguồn C không phát trực tiếp được
+### Link embed được tích hợp vào Stremio như thế nào
 
-API của Nguồn C là JSON mở và addon đọc đúng phần đó. Nhưng mỗi tập chỉ trỏ
-tới một trang embed, và trang đó giấu nguồn phát sau base64 lồng nhau, chạy
-bộ phát hiện DevTools tự ép reload, chặn chuột phải và phím xem mã nguồn —
-một lớp chống trích xuất dựng có chủ đích.
+Trình phát của Stremio chỉ nhận **link media** (m3u8/mp4), không nhận trang
+HTML. Đưa thẳng một link embed vào ô `url` thì Stremio sẽ cố phát mã nguồn
+trang — nên mọi link embed đều phải đổi thành link phát trước.
 
-Addon **không phá lớp đó**. Tập của Nguồn C xuất hiện dưới dạng link mở đúng
-trang phát của họ, tức là đúng thứ API công bố. Số tập vẫn được map chuẩn qua
-cùng bộ máy như các nguồn khác.
+Addon thử hai đường, rẻ trước:
+
+| Đường | Cách làm | Ví dụ |
+|---|---|---|
+| **Query** | link phát nằm sẵn trong chính query string của trang player, chỉ cần đọc — không tốn request nào | `player.phimapi.com/player/?url=<m3u8>` → lấy thẳng `<m3u8>` |
+| **Trang** | trang tự khai link phát trong HTML (`file:`, `sources: [...]`, `<video src>`, thuộc tính `data-` dạng base64) | tải trang một lần qua `/resolve`, đúng lúc bấm phát |
+
+Đường **Query** chạy đồng bộ khi dựng danh sách stream, nên KKPhim/Ophim có
+tập chỉ có `link_embed` mà không có `link_m3u8` vẫn phát được ngay, không chậm
+thêm mili-giây nào. Đường **Trang** hoãn tới `/resolve?u=<embed>` — addon tải
+trang lúc người dùng bấm phát rồi 302 sang link thật, tức là một request mỗi
+lần bấm thay vì một request cho mỗi server trong danh sách, và token ngắn hạn
+được lấy khi còn hạn.
+
+`/resolve` chỉ tải trang của những host trong `EMBED_HOSTS`. Endpoint này nhận
+URL từ query string, không có allowlist thì nó sẽ tải bất cứ địa chỉ nào người
+gọi đưa vào — kể cả mạng nội bộ của chính deployment.
+
+Xem một link embed có phát được trong Stremio hay không:
+
+```
+http://localhost:7000/probe/embed?u=<link embed đã encode>
+```
+
+Trả về: query string có mang link phát không, trang có tự khai không, và link
+lấy ra có phải manifest Stremio đọc được không.
+
+### Nguồn C phát trực tiếp bằng cách nào
+
+Trang embed của Nguồn C (`*.streamc.xyz`) không viết link phát ra ở đâu cả, nên
+bộ giải embed thông thường chạy qua nó không lấy được gì. Link thô cũng không
+dùng được, vì hai lớp sau:
+
+- **Manifest về ở dạng mã hoá.** Playlist không phải HLS chuẩn mà là
+  `#EXTM3U` kèm `#ENC-AESGCM;iv=…` và các dòng `#EXT-X-B65:`. Khoá là
+  `HMAC-SHA256("stream-derive-v1", videoHash)` lấy 32 byte đầu, giải AES-256-GCM
+  bằng IV nằm ngay trên dòng đó. Trình phát của Stremio đọc không ra.
+- **Endpoint đòi header.** Segment là MPEG-TS đội lốt `.png`, và host phục vụ
+  chúng xoay vòng (`cyin1.sbs`, `vivurtr.sbs`, `sings2.amass2.top`…). Gọi thẳng
+  trả `403 Access Denied: Missing Referer or Origin headers`, mà Stremio thì
+  không gửi Referer do addon đặt.
+
+Nhưng trang embed **có** công bố hai mảnh mà player của họ cần:
+`#player[data-obf]` là base64 của `{"sUb":"<stream token>","hD":"<video hash>"}`.
+Từ hai giá trị đó, `lib/embed.js` dựng link qua hai lớp:
+
+1. **`STREAMC_PROXY`** (`sc.k-20.xyz`) — giải playlist và ghi lại từng segment
+   qua chính nó, kèm Referer mà segment host đòi. Ra một m3u8 thường.
+2. **`STREMIO_PROXY`** (`127.0.0.1:11470`) — server nội bộ của Stremio, chạy
+   trên **máy đang xem** chứ không phải máy chạy addon. Nó nhận đích và header
+   ngay trong URL rồi gọi lại đúng như vậy:
+
+   ```
+   http://127.0.0.1:11470/proxy/d=<origin>&h=<Tên:Giá trị>&h=…/<path>?<query>
+   ```
+
+   Stremio tự viết lại từng dòng segment trong playlist thành `/proxy/…` của nó
+   kèm nguyên bộ header, nên cả manifest lẫn segment đều đi kèm Referer/Origin
+   của Nguồn C. Luồng video không đi qua deployment của addon.
+
+Việc đó chạy trong `/resolve` chứ không phải lúc dựng danh sách stream: token
+trong `sUb` là token ngắn hạn, dựng sớm thì tới lúc bấm phát có thể đã hết hạn.
+
+Hiện `sc.k-20.xyz` trả lời cả khi không có header nào, nên lớp 2 là để phòng xa
+chứ chưa bắt buộc — đặt `STREMIO_PROXY=` rỗng thì addon giao thẳng link m3u8,
+chạy được trên cả client không có server nội bộ. Đặt `STREAMC_PROXY=` rỗng thì
+addon không đụng tới hai lớp chặn nữa, và tập Nguồn C quay về dạng link mở đúng
+trang phát của họ.
+
+Kiểm tra một tập bất kỳ bằng `/probe/embed` — `resolved.via` sẽ là `streamc` và
+`media.kind` là `hls` khi đường này còn chạy.
 
 ### Vì sao HH3D không phát trực tiếp được
 
@@ -157,7 +232,8 @@ suất theo IP nên hay trả 403; khi đó addon bỏ qua HH3D, các nguồn kh
 ## Cấu hình
 
 Xem `.env.example`: `PORT`, `ADDON_BASE_URL`, `KKPHIM_API`, `OPHIM_API`,
-`HH3D_BASE`, `ENABLE_KKPHIM`, `ENABLE_OPHIM`, `ENABLE_HH3D`, `CACHE_TTL`.
+`NGUONC_API`, `HH3D_BASE`, `ENABLE_KKPHIM`, `ENABLE_OPHIM`, `ENABLE_NGUONC`,
+`ENABLE_HH3D`, `RESOLVE_EMBEDS`, `EMBED_HOSTS`, `EMBED_TTL`, `CACHE_TTL`.
 
 ## Ghi chú
 

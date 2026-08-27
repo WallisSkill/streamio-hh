@@ -26,6 +26,17 @@ export const CONFIG = {
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean),
   embedTtl: Number(env.EMBED_TTL || 300) * 1000,
+  // Nguồn C serves its playlist AES-GCM encrypted, and its segments answer 403
+  // to any request without a Referer — so the raw track is unplayable in
+  // Stremio on both counts. This proxy decrypts the playlist and rewrites every
+  // segment through itself, carrying the Referer the segment host demands.
+  // Empty disables it: streamc episodes then fall back to an external link.
+  streamcProxy: (env.STREAMC_PROXY ?? 'https://sc.k-20.xyz').replace(/\/+$/, ''),
+  // Stremio's own streaming server, running on the machine that plays the
+  // video — 127.0.0.1 here means the viewer's machine, not this deployment's.
+  // Wrapping the track in it makes Stremio fetch the track with the Referer and
+  // Origin of the site it came from. Empty hands over the bare URL instead.
+  stremioProxy: (env.STREMIO_PROXY ?? 'http://127.0.0.1:11470').replace(/\/+$/, ''),
   cacheTtl: Number(env.CACHE_TTL || 1800) * 1000,
   cinemeta: 'https://v3-cinemeta.strem.io',
   kitsuApi: 'https://kitsu.io/api/edge',

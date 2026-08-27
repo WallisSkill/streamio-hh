@@ -9,15 +9,17 @@ import { cached } from './cache.js';
  * URL as `url` makes it try to play markup, so every embed has to become an
  * m3u8/mp4 first — and the ones that cannot are better off as external links.
  *
- * Two ways in, cheapest first:
+ * Three ways in, cheapest first:
  *   1. the player page carries the track in its own query string
  *      (`player.phimapi.com/player/?url=<m3u8>`) — pure string work, no request;
  *   2. the page declares it openly in markup (`file:`, `sources: [...]`,
- *      `<video src>`, a base64 data attribute) — one fetch.
+ *      `<video src>`, a base64 data attribute) — one fetch;
+ *   3. streamc.xyz publishes what its own player needs — a signed stream token
+ *      and the video hash — in a base64 data attribute, which is enough to
+ *      build a playable track through CONFIG.streamcProxy. See fromStreamc.
  *
- * A page that only assembles its track at runtime, behind a manifest its own
- * player decrypts, is deliberately out of scope: resolveEmbed returns null and
- * the caller falls back to an external link.
+ * A page that publishes none of the three is out of scope: resolveEmbed returns
+ * null and the caller falls back to an external link.
  */
 
 const MEDIA = /https?:\/\/[^\s"'<>\\)]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\)]*)?/i;
@@ -106,6 +108,111 @@ function fromMarkup(html) {
 }
 
 /**
+ * streamc.xyz (Nguồn C) -> a track through CONFIG.streamcProxy.
+ *
+ * The page hands its own player everything it needs in one base64 attribute,
+ * `#player[data-obf]`, which decodes to { sUb, hD }: a signed stream token and
+ * the video hash. Neither is playable as-is — the playlist behind the token
+ * arrives AES-GCM encrypted, and its segments answer 403 to any request without
+ * a Referer, which Stremio never sends. So both are handed to the proxy, which
+ * returns a plain playlist with every segment rewritten through itself.
+ *
+ * `t` inside the token is the same value the proxy wants as `key`; if the token
+ * ever stops being readable JSON, the key is simply left empty rather than
+ * failing the whole resolve.
+ */
+function fromStreamc(html, embed) {
+  if (!CONFIG.streamcProxy) return null;
+
+  const attr = /data-obf\s*=\s*["']([A-Za-z0-9+/=]{16,})["']/.exec(html);
+  if (!attr) return null;
+
+  const b64 = (value) => {
+    try {
+      return JSON.parse(Buffer.from(value, 'base64').toString('utf8'));
+    } catch {
+      return null;
+    }
+  };
+
+  const data = b64(attr[1]);
+  const token = String(data?.sUb || '');
+  const hash = String(data?.hD || '');
+  if (!token || !hash) return null;
+
+  const query = new URLSearchParams({
+    url: `${new URL(embed).origin}/${token}.m3u8`,
+    key: String(b64(token)?.t || ''),
+    hash,
+    referer: embed,
+  });
+  const track = `${CONFIG.streamcProxy}/proxy-playlist.m3u8?${query}`;
+
+  // The proxy answers this one without any header, but the site it fronts is
+  // header-gated throughout, so the track is handed over with Nguồn C's own
+  // Referer/Origin attached rather than betting on that staying true.
+  return viaStremioProxy(track, {
+    Referer: `${CONFIG.nguoncApi}/`,
+    'User-Agent': CONFIG.userAgent,
+    Origin: CONFIG.nguoncApi,
+  });
+}
+
+/**
+ * Track -> the same track fetched by Stremio's streaming server with headers.
+ *
+ * Stremio's player sends no Referer of its own, so a host that demands one is
+ * unreachable from it. Its local server takes the destination and the headers
+ * in the URL itself and replays the request with them:
+ *
+ *   http://127.0.0.1:11470/proxy/d=<origin>&h=<Name:Value>&h=…/<path>?<query>
+ *
+ * 127.0.0.1 is the machine playing the video, not the one running this addon —
+ * so this URL is built for the viewer and never fetched here.
+ */
+export function viaStremioProxy(track, headers = {}) {
+  if (!CONFIG.stremioProxy) return track;
+
+  let target;
+  try {
+    target = new URL(track);
+  } catch {
+    return track;
+  }
+
+  const opts = new URLSearchParams({ d: target.origin });
+  for (const [name, value] of Object.entries(headers)) {
+    if (value) opts.append('h', `${name}:${value}`);
+  }
+  return `${CONFIG.stremioProxy}/proxy/${opts}${target.pathname}${target.search}`;
+}
+
+/**
+ * The reverse, for diagnostics: the real destination and headers behind a
+ * proxy URL. /probe/embed runs on the addon's machine, where 127.0.0.1:11470
+ * is either absent or someone else's server, so it has to look through it.
+ */
+export function unwrapStremioProxy(url) {
+  const at = String(url).indexOf('/proxy/d=');
+  if (at === -1) return { url, headers: {} };
+
+  const rest = url.slice(at + '/proxy/'.length);
+  const cut = rest.indexOf('/');
+  if (cut === -1) return { url, headers: {} };
+
+  const opts = new URLSearchParams(rest.slice(0, cut));
+  const origin = opts.get('d');
+  if (!origin) return { url, headers: {} };
+
+  const headers = {};
+  for (const pair of opts.getAll('h')) {
+    const at2 = pair.indexOf(':');
+    if (at2 > 0) headers[pair.slice(0, at2).trim()] = pair.slice(at2 + 1).trim();
+  }
+  return { url: origin + rest.slice(cut), headers };
+}
+
+/**
  * Embed URL -> { url, via } or null when the page does not publish its track.
  * `via` names the route that found it, so /probe/embed can show the reason.
  */
@@ -120,6 +227,13 @@ export async function resolveEmbed(embed) {
       const origin = `${new URL(embed).origin}/`;
       const page = await safe(getText(embed, { referer: origin, fresh: true }), 'embed');
       if (!page?.body) return null;
+
+      // Host-specific first: on a streamc page the generic markup sweep has
+      // nothing correct to find, so letting it guess first only risks a wrong
+      // hit from an unrelated URL sitting in the page.
+      const viaStreamc = fromStreamc(page.body, embed);
+      if (viaStreamc) return { url: viaStreamc, via: 'streamc' };
+
       const hit = fromMarkup(page.body);
       return hit ? { url: hit, via: 'page' } : null;
     },
@@ -136,18 +250,22 @@ export async function inspectMedia(url) {
   const started = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12000);
+  // A proxied URL points at the viewer's machine, so what gets probed is the
+  // destination behind it — with the headers the proxy would have replayed.
+  const direct = unwrapStremioProxy(url);
   try {
-    const res = await fetch(url, {
+    const res = await fetch(direct.url, {
       redirect: 'follow',
       signal: ctrl.signal,
-      headers: { 'user-agent': CONFIG.userAgent, range: 'bytes=0-2047' },
+      headers: { 'user-agent': CONFIG.userAgent, range: 'bytes=0-2047', ...direct.headers },
     });
     const head = (await res.text()).slice(0, 800);
     let kind = 'unknown';
     if (/^#EXTM3U/.test(head)) kind = /#ENC-|#EXT-X-B65/.test(head) ? 'hls-encrypted' : 'hls';
-    else if (/[.]mp4([?]|$)/i.test(url)) kind = 'mp4';
+    else if (/[.]mp4([?]|$)/i.test(direct.url)) kind = 'mp4';
     return {
       url,
+      probed: direct.url === url ? undefined : direct.url,
       status: res.status,
       ms: Date.now() - started,
       contentType: res.headers.get('content-type') || null,

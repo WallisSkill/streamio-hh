@@ -24,16 +24,22 @@ import { parseEpisodeLabel, detectSeason } from '../lib/text.js';
  *      ↓
  *   server.items
  *      ↓
- *   episode.embed / episode.link_embed
+ *   episode.embed
  *
- * API detail trả về link embed của từng episode.
+ * API detail trả về embed URL của từng episode.
  *
- * Module này KHÔNG tự generate token/hash/key.
- * Những thông tin đó thuộc stream provider phía sau embed.
+ * Module này chỉ đọc phần API công khai trả về — nó dừng ở embed URL.
+ *
+ * Việc biến embed URL đó thành link phát được nằm ở `lib/embed.js`
+ * (`fromStreamc`): trang embed công bố stream token và video hash trong
+ * `#player[data-obf]`, hai giá trị đó được đưa qua `CONFIG.streamcProxy`
+ * vì bản thân playlist về ở dạng mã hoá và segment đòi Referer.
+ *
+ * Đặt `STREAMC_PROXY=` rỗng thì tập Nguồn C quay lại dạng link mở ngoài.
  */
 
 /**
- * category is a numbered map of groups; the year sits in the group named "Năm".
+ * Lấy năm phim từ category.
  */
 function yearOf(movie) {
   for (const g of Object.values(movie?.category || {})) {
@@ -50,7 +56,8 @@ function yearOf(movie) {
 }
 
 /**
- * original_name packs several aliases into one comma-separated string.
+ * original_name có thể chứa nhiều tên,
+ * phân cách bằng dấu phẩy.
  */
 function aliasesOf(item) {
   return String(item?.original_name || '')
@@ -60,18 +67,15 @@ function aliasesOf(item) {
 }
 
 /**
- * Search results carry no `category`, so the format group is only available
- * on the detail response.
- *
- * Episode count stands in for it:
- *   - 1 episode => standalone film
- *   - >1 episodes => series
+ * Xác định loại phim.
  */
 function typeOf(item) {
   const format = item?.category?.['1']?.list?.[0]?.name;
 
   if (format) {
-    return /l(ẻ|e)/i.test(format) ? 'single' : 'series';
+    return /l(ẻ|e)/i.test(format)
+      ? 'single'
+      : 'series';
   }
 
   return Number(item?.total_episodes) === 1
@@ -80,8 +84,7 @@ function typeOf(item) {
 }
 
 /**
- * Convert movie item returned by Nguồn C API
- * into our internal candidate format.
+ * Convert movie API object sang internal candidate.
  */
 function toCandidate(item) {
   const alts = aliasesOf(item);
@@ -114,17 +117,10 @@ function toCandidate(item) {
 }
 
 /**
- * Get embed URL from an episode.
+ * Lấy embed URL từ episode.
  *
- * Depending on API response/version, Nguồn C may expose:
- *
- *   embed
- *
- * or:
- *
- *   link_embed
- *
- * Support both.
+ * Ưu tiên embed vì đây là field được API
+ * Nguồn C trả về trong response hiện tại.
  */
 function getEpisodeEmbed(ep) {
   if (!ep) {
@@ -141,16 +137,9 @@ function getEpisodeEmbed(ep) {
 }
 
 /**
- * Get m3u8 URL if API happens to provide one.
+ * Nếu API có trả trực tiếp m3u8 thì giữ lại.
  *
- * Nguồn C responses may expose:
- *
- *   link_m3u8
- *
- * We keep this as fallback.
- *
- * IMPORTANT:
- * We do not generate key/hash/token here.
+ * Không tự generate m3u8/token/key.
  */
 function getEpisodeM3u8(ep) {
   if (!ep) {
@@ -167,7 +156,7 @@ function getEpisodeM3u8(ep) {
 }
 
 /**
- * Search movies.
+ * Search phim.
  */
 export async function search(keyword) {
   if (!keyword) {
@@ -183,36 +172,12 @@ export async function search(keyword) {
     'nguonc-search',
   );
 
-  return (data?.items || []).map(toCandidate);
+  return (data?.items || [])
+    .map(toCandidate);
 }
 
 /**
- * Get movie detail + servers + episodes.
- *
- * Example API flow:
- *
- *   GET /api/film/{slug}
- *
- * Response:
- *
- *   {
- *     movie: {
- *       ...
- *       episodes: [
- *         {
- *           server_name: "...",
- *           items: [
- *             {
- *               name: "1",
- *               embed: "https://...",
- *               link_embed: "https://...",
- *               link_m3u8: "https://..."
- *             }
- *           ]
- *         }
- *       ]
- *     }
- *   }
+ * Lấy detail phim.
  */
 export async function detail(slug) {
   if (!slug) {
@@ -237,74 +202,81 @@ export async function detail(slug) {
 
       const servers = (movie.episodes || [])
         .map((srv) => ({
-          name: srv.server_name || 'Server',
+          name:
+            srv.server_name ||
+            'Server',
 
-          episodes: (srv.items || [])
-            .map((ep) => {
-              const parsed = parseEpisodeLabel(ep.name);
+          episodes:
+            (srv.items || [])
+              .map((ep) => {
+                const parsed =
+                  parseEpisodeLabel(
+                    ep.name,
+                  );
 
-              const embed = getEpisodeEmbed(ep);
+                const embed =
+                  getEpisodeEmbed(ep);
 
-              const m3u8 = getEpisodeM3u8(ep);
+                const m3u8 =
+                  getEpisodeM3u8(ep);
 
-              return {
-                /**
-                 * Display name.
-                 */
-                label:
-                  /^\d+$/.test(
-                    String(ep.name).trim(),
-                  )
-                    ? `Tập ${ep.name}`
-                    : String(ep.name),
+                return {
+                  label:
+                    /^\d+$/.test(
+                      String(
+                        ep.name,
+                      ).trim(),
+                    )
+                      ? `Tập ${ep.name}`
+                      : String(
+                          ep.name,
+                        ),
 
-                /**
-                 * Episode number.
-                 */
-                num: parsed.num,
+                  num: parsed.num,
 
-                isFull: parsed.isFull,
+                  isFull:
+                    parsed.isFull,
 
-                isSpecial: parsed.isSpecial,
+                  isSpecial:
+                    parsed.isSpecial,
 
-                /**
-                 * If API already provides m3u8,
-                 * keep it.
-                 *
-                 * Otherwise null.
-                 */
-                m3u8,
+                  /**
+                   * Chỉ dùng m3u8 nếu API
+                   * trả trực tiếp field này.
+                   */
+                  m3u8,
 
-                /**
-                 * This is the important part:
-                 *
-                 * embed returned directly by
-                 * Nguồn C API.
-                 */
-                embed,
+                  /**
+                   * Embed URL chính thức
+                   * được API trả về.
+                   *
+                   * Ví dụ:
+                   *
+                   * https://embed1.streamc.xyz/
+                   * embed.php?hash=430b...
+                   */
+                  embed,
 
-                /**
-                 * Keep page alias for compatibility
-                 * with the existing application.
-                 */
-                page: embed,
+                  /**
+                   * Alias tương thích với
+                   * code player hiện tại.
+                   */
+                  page: embed,
 
-                /**
-                 * Keep original API fields useful
-                 * for debugging/future integration.
-                 */
-                sourceEpisode: ep,
-              };
-            })
-            /**
-             * Only expose episodes that have an embed
-             * or direct m3u8.
-             */
-            .filter(
-              (ep) =>
-                ep.embed ||
-                ep.m3u8,
-            ),
+                  /**
+                   * Giữ response gốc nếu cần
+                   * debug.
+                   */
+                  sourceEpisode: ep,
+                };
+              })
+              .filter(
+                (ep) =>
+                  Boolean(
+                    ep.embed ||
+                    ep.m3u8,
+                  ),
+              ),
         }));
 
       return {
@@ -317,7 +289,9 @@ export async function detail(slug) {
           movie.language || '',
 
         episodeTotal:
-          Number(movie.total_episodes) || null,
+          Number(
+            movie.total_episodes,
+          ) || null,
 
         servers,
 
@@ -325,16 +299,16 @@ export async function detail(slug) {
           0,
 
           ...servers.flatMap(
-            (s) =>
-              s.episodes
+            (server) =>
+              server.episodes
                 .filter(
-                  (e) =>
-                    !e.isSpecial &&
-                    e.num,
+                  (episode) =>
+                    !episode.isSpecial &&
+                    episode.num,
                 )
                 .map(
-                  (e) =>
-                    e.num,
+                  (episode) =>
+                    episode.num,
                 ),
           ),
         ),
@@ -344,35 +318,39 @@ export async function detail(slug) {
 }
 
 /**
- * Get embed URL directly from a movie episode.
+ * Lấy embed URL.
  *
- * This helper is useful if the caller already has
- * the detail response and only needs the player URL.
+ * Ví dụ:
+ *
+ * getEmbed(episode)
+ *
+ * =>
+ *
+ * https://embed1.streamc.xyz/embed.php?hash=430b4d...
  */
 export function getEmbed(episode) {
-  return episode?.embed || null;
+  return getEpisodeEmbed(episode);
 }
 
 /**
- * Get direct m3u8 returned by API, if available.
+ * Lấy m3u8 nếu API có trả trực tiếp.
  */
 export function getM3u8(episode) {
-  return episode?.m3u8 || null;
+  return getEpisodeM3u8(episode);
 }
 
 /**
  * Module definition.
- *
- * IMPORTANT:
- *
- * `linkOnly` is now false because the module exposes
- * the embed URL returned by the Nguồn C API.
  */
 export default {
   id: 'nguonc',
 
   label: 'Nguồn C',
 
+  /**
+   * false:
+   * player được phép sử dụng embed URL.
+   */
   linkOnly: false,
 
   search,
