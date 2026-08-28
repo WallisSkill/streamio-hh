@@ -35,12 +35,15 @@ async function withRetry(fn, tries = 2) {
 }
 
 export async function getJson(url, opts = {}) {
+  // `tries: 1` cho những lệnh gọi mà chờ lâu tệ hơn là thiếu dữ liệu: thử lại
+  // nhân đôi thời gian chờ đúng lúc bên kia đang chậm sẵn.
+  const { tries = 2, ...rest } = opts;
   return cached(`json:${url}`, () =>
     withRetry(async () => {
-      const res = await raw(url, opts);
+      const res = await raw(url, rest);
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
       return res.json();
-    }),
+    }, tries),
   );
 }
 

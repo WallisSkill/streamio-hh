@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { getJson, safe } from './http.js';
-import { cached } from './cache.js';
+import { cached, cacheGet, cacheSet } from './cache.js';
 
 /**
  * Official Stremio metadata (Cinemeta) for an IMDb id.
@@ -60,19 +60,34 @@ export function buildEpisodeIndex(meta) {
  */
 export async function getAliases(name, year) {
   if (!name) return [];
-  return cached(`aliases:${name}:${year || ''}`, async () => {
-    const url = `${CONFIG.kitsuApi}/anime?filter[text]=${encodeURIComponent(name)}&page[limit]=5`;
-    const data = await safe(getJson(url, { headers: { accept: 'application/vnd.api+json' } }), 'kitsu');
-    const out = new Set();
-    for (const item of data?.data || []) {
-      const a = item.attributes || {};
-      const start = a.startDate ? Number(String(a.startDate).slice(0, 4)) : null;
-      if (year && start && Math.abs(start - Number(year)) > 2) continue;
-      for (const t of Object.values(a.titles || {})) if (t) out.add(t);
-      for (const t of a.abbreviatedTitles || []) if (t) out.add(t);
-    }
-    return [...out].slice(0, 8);
-  });
+
+  // Không dùng cached(): nó cache cả kết quả rỗng của một lần Kitsu chậm hay
+  // hỏng, và thế là suốt 30 phút sau phim đó mất hết tên gọi khác vì đúng một
+  // lần mạng xấu. Ở đây chỉ cache khi thật sự lấy được gì.
+  const key = `aliases:${name}:${year || ''}`;
+  const hit = cacheGet(key);
+  if (hit !== undefined) return hit;
+
+  const url = `${CONFIG.kitsuApi}/anime?filter[text]=${encodeURIComponent(name)}&page[limit]=5`;
+  const data = await safe(
+    getJson(url, {
+      timeout: CONFIG.aliasTimeout,
+      tries: 1,
+      headers: { accept: 'application/vnd.api+json' },
+    }),
+    'kitsu',
+  );
+  if (!data) return [];
+
+  const out = new Set();
+  for (const item of data?.data || []) {
+    const a = item.attributes || {};
+    const start = a.startDate ? Number(String(a.startDate).slice(0, 4)) : null;
+    if (year && start && Math.abs(start - Number(year)) > 2) continue;
+    for (const t of Object.values(a.titles || {})) if (t) out.add(t);
+    for (const t of a.abbreviatedTitles || []) if (t) out.add(t);
+  }
+  return cacheSet(key, [...out].slice(0, 8));
 }
 
 /** Kitsu id -> title/episode info, for `kitsu:<id>[:<ep>]` stream requests. */

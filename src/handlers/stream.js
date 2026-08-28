@@ -94,25 +94,35 @@ async function resolveTarget(parsed) {
 
 /** VN sites title seasons inline, so ask for them by name too. */
 function buildQueries(target, season) {
-  const q = new Set();
+  // Gộp theo bản đã bỏ hoa/thường. baseTitle() viết thường mọi thứ, nên mỗi
+  // tên gốc viết hoa sinh thêm một truy vấn gần như trùng — "Swallowed Star"
+  // và "swallowed star" trả về cùng một kết quả, hỏi cả hai là tự nhân đôi số
+  // request. Đo trên Thôn Phệ Tinh Không: 11 truy vấn còn 7.
+  const seen = new Map();
+  const add = (value) => {
+    const text = String(value || '').trim();
+    const key = text.toLowerCase();
+    if (text && !seen.has(key)) seen.set(key, text);
+  };
+
   for (const t of target.titles.slice(0, 6)) {
     if (!t) continue;
-    q.add(t);
-    q.add(baseTitle(t));
+    add(t);
+    add(baseTitle(t));
     // Subtitles are where translations disagree, so the name in front of the
     // colon is the part a VN site is most likely to have written the same way.
-    q.add(titleHead(t));
+    add(titleHead(t));
   }
   if (season && season > 1) {
     for (const t of target.titles.slice(0, 3)) {
       const b = baseTitle(t);
       if (b) {
-        q.add(`${b} phan ${season}`);
-        q.add(`${b} ${season}`);
+        add(`${b} phan ${season}`);
+        add(`${b} ${season}`);
       }
     }
   }
-  return [...q].filter(Boolean).slice(0, 10);
+  return [...seen.values()].slice(0, CONFIG.maxQueries);
 }
 
 async function gatherFrom(source, target, season) {

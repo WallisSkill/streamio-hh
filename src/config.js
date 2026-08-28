@@ -68,4 +68,16 @@ export const CONFIG = {
   userAgent:
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   httpTimeout: 15000,
+  // Trần cho lệnh gọi Kitsu lấy tên gọi khác. Để rộng có chủ đích: đo ngày
+  // 29/08/2026 cho thấy cắt ngắn KHÔNG làm nhanh lên mà lại mất nguồn — ngưỡng
+  // 1500ms và 3500ms đều rụng Nguồn C và tổng thời gian còn lâu hơn ngưỡng
+  // 8000ms, vì thời gian bị chi phối bởi độ dao động của các API chứ không
+  // phải bởi việc chờ Kitsu. Trần này chỉ để chặn trường hợp Kitsu treo hẳn.
+  aliasTimeout: Number(env.ALIAS_TIMEOUT || 8000),
+  // Số truy vấn tìm kiếm tối đa gửi tới MỖI nguồn cho một lượt bấm. Đây mới là
+  // thứ quyết định số request đi ra, không phải việc gộp trùng — gộp chỉ làm 10
+  // truy vấn đó khác nhau nhiều hơn.
+  // 6 chứ không phải 10: hạ xuống 4 và 6 đều qua đủ 8/8 regression, nhưng bộ
+  // test chỉ có 8 phim nên chừa dư một ít cho phim nhiều tên gọi khác.
+  maxQueries: Number(env.MAX_QUERIES || 6),
 };
