@@ -3,7 +3,7 @@ export const MANIFEST = {
   // cài phải gỡ ra cài lại. Tên hiển thị đổi được tự do, id thì không nên.
   id: 'community.vn.kkphim.hh3d',
   version: '1.0.0',
-  name: 'wisFilm',
+  name: 'WiSFilm',
   description:
     'Gộp nhiều nguồn phim trong nước, khớp đúng số tập với danh sách chính thức trên Stremio (Cinemeta/Kitsu). Hỗ trợ đánh số theo phần và đánh số tuyệt đối.',
   // Logo do chính addon phục vụ ở /logo.svg, gắn địa chỉ tuyệt đối lúc trả
