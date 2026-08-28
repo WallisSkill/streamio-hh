@@ -4,6 +4,7 @@ import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
 import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
 import { routesTo } from './sources/nguonc.js';
+import { landingPage, LOGO_SVG } from './lib/landing.js';
 
 /**
  * Try one route to nguonc and say whether real data came back.
@@ -145,17 +146,15 @@ function baseUrlOf(req) {
   return `${proto}://${host}`;
 }
 
-function landingPage(req) {
-  const base = baseUrlOf(req);
-  const install = `stremio://${base.replace(/^https?:[/][/]/, '')}/manifest.json`;
-  return `<!doctype html><meta charset="utf-8"><title>${MANIFEST.name}</title>
-<style>body{font-family:system-ui;max-width:720px;margin:60px auto;padding:0 20px;line-height:1.6}
-code{background:#eee;padding:2px 6px;border-radius:4px}a.btn{display:inline-block;background:#7b5bf2;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600}</style>
-<h1>${MANIFEST.name}</h1><p>${MANIFEST.description}</p>
-<p><a class="btn" href="${install}">Cài vào Stremio</a></p>
-<p>Hoặc dán URL này vào Stremio → Addons → Add addon:<br><code>${base}/manifest.json</code></p>
-<h3>Kiểm tra khớp tập</h3>
-<p><code>/debug/series/tt0388629:21:1</code> — xem addon chọn nguồn nào và map ra tập nào.</p>`;
+/**
+ * Manifest kèm địa chỉ logo tuyệt đối.
+ *
+ * Stremio đọc `logo` như một URL đứng riêng, không ghép với địa chỉ addon, nên
+ * nó phải là đường dẫn đầy đủ. Suy ra từ chính request thay vì cấu hình, để
+ * addon chạy ở đâu cũng trỏ đúng vào bản thân nó.
+ */
+function manifestFor(req) {
+  return { ...MANIFEST, logo: `${baseUrlOf(req)}/logo.svg` };
 }
 
 /**
@@ -185,9 +184,19 @@ export async function handleRequest(req, res) {
 
     if (path === '/') {
       res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' });
-      return res.end(landingPage(req));
+      return res.end(landingPage(baseUrlOf(req)));
     }
-    if (path === '/manifest.json') return send(res, 200, MANIFEST, { edge: true });
+    if (path === '/manifest.json') return send(res, 200, manifestFor(req), { edge: true });
+
+    // Logo của addon, phục vụ tại chỗ để manifest khỏi trỏ ra bên ngoài.
+    if (path === '/logo.svg') {
+      res.writeHead(200, {
+        ...CORS,
+        'content-type': 'image/svg+xml; charset=utf-8',
+        'cache-control': 'public, max-age=86400',
+      });
+      return res.end(LOGO_SVG);
+    }
 
     // /stream/:type/:id.json
     const m = /^\/stream\/(movie|series)\/(.+?)(?:\.json)?$/.exec(path);

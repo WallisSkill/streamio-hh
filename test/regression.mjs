@@ -43,8 +43,10 @@ for (const c of CASES) {
   const d = json.debug?.sources?.[src]?.decision || {};
   const okMode = c.want.mode === undefined || d.mode === c.want.mode;
   const okTarget = c.want.target === undefined || d.target === c.want.target;
+  // `includes` chứ không phải `startsWith`: tên stream mang tiền tố thương hiệu
+  // ở đầu, đổi tên addon không được làm hỏng bộ test.
   const okStream = c.wantStream
-    ? (json.streams || []).some((s) => String(s.name || '').startsWith(c.wantStream))
+    ? (json.streams || []).some((s) => String(s.name || '').includes(c.wantStream))
     : (json.streams || []).length > 0;
   const ok = okMode && okTarget && okStream;
   if (ok) pass++;

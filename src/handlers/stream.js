@@ -9,6 +9,16 @@ import { resolveEpisode } from '../lib/episodeMap.js';
 import { baseTitle, titleHead } from '../lib/text.js';
 import { getOverride } from '../lib/overrides.js';
 import { unwrapEmbed, embedFetchable } from '../lib/embed.js';
+import { MANIFEST } from '../manifest.js';
+
+/**
+ * Tên thương hiệu đứng đầu mỗi dòng stream trong Stremio.
+ *
+ * Danh sách stream của một tập trộn lẫn kết quả từ nhiều addon, nên phải nhìn
+ * ra ngay dòng nào là của addon này. Lấy thẳng từ manifest để đổi tên một chỗ
+ * là đổi khắp nơi, không sót dòng nào mang tên cũ.
+ */
+const BRAND = MANIFEST.name;
 
 /** API sources that publish playable links openly. Order = display order. */
 function apiSources() {
@@ -236,7 +246,7 @@ function streamsFromEntry(entry, source, target, parsed, wantType, dbg, baseUrl)
     const title = [entry.name, `▶ ${picked.episode.label}${warn}`, picked.decision.note, quality]
       .filter(Boolean)
       .join('\n');
-    const name = `${source.label}${warn}\n${server.name}`;
+    const name = `${BRAND} | ${source.label}${warn}\n${server.name}`;
 
     // Nothing playable came out of the embed — hand over the publisher's own
     // player page as a link rather than asking Stremio to play markup.
@@ -302,7 +312,7 @@ async function hh3dStream(target, parsed, dbg) {
     if (!picked.episode) return [];
     return [
       {
-        name: 'HH3D\nMở trang',
+        name: `${BRAND} | HH3D\nMở trang`,
         title: [entry.name, `▶ Tập ${picked.episode.num}`, picked.decision.note, 'Mở trên hoathinh3d']
           .filter(Boolean)
           .join('\n'),
@@ -321,7 +331,7 @@ async function hh3dStream(target, parsed, dbg) {
   dbg.decision = { mode: 'pinned', target: epNum, confidence: 'medium', note: 'Dựng link từ slug đã ghim' };
   return [
     {
-      name: 'HH3D\nMở trang',
+      name: `${BRAND} | HH3D\nMở trang`,
       title: [target.name, `▶ Tập ${epNum}`, 'Mở trên hoathinh3d'].join('\n'),
       externalUrl: `${CONFIG.hh3dBase}/xem-phim-${entry.slug}/tap-${epNum}-sv1.html`,
     },
