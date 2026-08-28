@@ -1,0 +1,69 @@
+/**
+ * Logo của addon, nhúng thẳng vào mã nguồn.
+ *
+ * Hai định dạng cho hai chỗ dùng: SVG cho trang web vì nó nét ở mọi cỡ màn
+ * hình, PNG cho manifest vì trình duyệt ảnh của Stremio không phải bản nào cũng
+ * dựng được SVG — mà logo hỏng thì ô addon chỉ còn hình mảnh ghép.
+ *
+ * Nhúng chứ không đọc tệp: Workers không có hệ thống tệp, và một ảnh 3.6 KB
+ * nằm trong mã nguồn cũng chẳng nặng hơn là bao.
+ */
+
+export const LOGO_SVG =
+  "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\" width=\"256\" height=\"256\"><rect width=\"256\" height=\"256\" rx=\"58\" fill=\"#7b5bf2\"/><path d=\"M56 86 L96 178 L128 116 L160 178 L200 86\" fill=\"none\" stroke=\"#fff\" stroke-width=\"26\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>";
+
+const LOGO_PNG_BASE64 =
+  "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";
+
+/** atob chứ không phải Buffer: chạy được cả trên Node lẫn Workers. */
+export const LOGO_PNG = Uint8Array.from(atob(LOGO_PNG_BASE64), (c) => c.charCodeAt(0));

@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { MANIFEST } from '../manifest.js';
+import { LOGO_SVG } from './logo.js';
 
 /**
  * Trang chủ của addon.
@@ -13,11 +14,6 @@ import { MANIFEST } from '../manifest.js';
  * chặn CDN, và mỗi request ngoài là một lần chờ thêm.
  */
 
-/** Logo, dùng chung cho trang này và cho ô ảnh của addon trong Stremio. */
-export const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect width="64" height="64" rx="14" fill="#7b5bf2"/>
-  <path d="M14 20h6l4 16 4-16h6l4 16 4-16h6l-7 26h-7l-3-12-3 12h-7z" fill="#fff"/>
-</svg>`;
 
 const SOURCES = () => [
   { name: 'KKPhim', on: CONFIG.enableKkphim, note: 'm3u8 trực tiếp' },

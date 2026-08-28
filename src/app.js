@@ -4,7 +4,8 @@ import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
 import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
 import { routesTo } from './sources/nguonc.js';
-import { landingPage, LOGO_SVG } from './lib/landing.js';
+import { landingPage } from './lib/landing.js';
+import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
 
 /**
  * Try one route to nguonc and say whether real data came back.
@@ -154,7 +155,9 @@ function baseUrlOf(req) {
  * addon chạy ở đâu cũng trỏ đúng vào bản thân nó.
  */
 function manifestFor(req) {
-  return { ...MANIFEST, logo: `${baseUrlOf(req)}/logo.svg` };
+  // PNG chứ không phải SVG: Stremio dựng logo bằng thẻ ảnh, và không phải bản
+  // nào cũng đọc được SVG — hỏng thì ô addon chỉ còn hình mảnh ghép.
+  return { ...MANIFEST, logo: `${baseUrlOf(req)}/logo.png` };
 }
 
 /**
@@ -189,13 +192,15 @@ export async function handleRequest(req, res) {
     if (path === '/manifest.json') return send(res, 200, manifestFor(req), { edge: true });
 
     // Logo của addon, phục vụ tại chỗ để manifest khỏi trỏ ra bên ngoài.
-    if (path === '/logo.svg') {
+    // Hai định dạng: PNG cho Stremio, SVG cho trang web và ai muốn bản nét.
+    if (path === '/logo.png' || path === '/logo.svg') {
+      const png = path === '/logo.png';
       res.writeHead(200, {
         ...CORS,
-        'content-type': 'image/svg+xml; charset=utf-8',
+        'content-type': png ? 'image/png' : 'image/svg+xml; charset=utf-8',
         'cache-control': 'public, max-age=86400',
       });
-      return res.end(LOGO_SVG);
+      return res.end(png ? LOGO_PNG : LOGO_SVG);
     }
 
     // /stream/:type/:id.json
