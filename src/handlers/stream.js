@@ -412,10 +412,14 @@ export async function getStreams(type, rawId, { baseUrl = '' } = {}) {
     guard(source.id, (dbg) => streamsFrom(source, target, parsed, wantType, dbg, baseUrl)),
   );
 
-  if (wantType === 'series') {
+  // HH3D chỉ sinh ra link mở trang, nên khi những dòng đó bị tắt thì gọi nó là
+  // chờ vô ích — cắt luôn ở đây thay vì lọc bỏ kết quả sau khi đã đợi xong.
+  if (wantType === 'series' && CONFIG.linkRows) {
     jobs.push(guard('hh3d', (dbg) => hh3dStream(target, parsed, dbg)));
   }
 
-  const streams = (await Promise.all(jobs)).flat();
+  const all = (await Promise.all(jobs)).flat();
+  const streams = CONFIG.linkRows ? all : all.filter((s) => !s.externalUrl);
+  if (!CONFIG.linkRows) debug.hidden = all.length - streams.length;
   return { streams, debug };
 }

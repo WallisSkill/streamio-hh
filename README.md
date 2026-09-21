@@ -319,12 +319,26 @@ deployment của addon; addon chỉ phục vụ đúng file playlist vài chục
 Việc đó chạy lúc bấm phát chứ không phải lúc dựng danh sách stream: grant chỉ
 sống vài giờ, dựng sớm thì tới lúc xem có thể đã hết hạn.
 
-**Trên Cloudflare Workers đường này không chạy.** streamc cũng nằm sau
-Cloudflare, và request từ Worker sang một zone Cloudflare khác không rời mạng
-đó — streamc trả `403` sau đúng 5ms cho cả GET lẫn POST (đo 21/09/2026), y
-như chuyện đã xảy ra với relay nguonc. Worker tự biết mình đang ở đâu
-(`navigator.userAgent === 'Cloudflare-Workers'`) nên nó không dựng dòng
-`/hls.m3u8` chết: tập Nguồn C ra dạng link mở trang.
+**Trên Cloudflare Workers đường này không chạy** — và không phải vì header.
+Đo ngày 22/09/2026, cùng một URL embed:
+
+| Gọi từ | Header | Kết quả |
+|---|---|---|
+| Máy thường | không header / UA curl | `403` |
+| Máy thường | UA trình duyệt | `200` |
+| Worker | UA trình duyệt | `403` sau 3ms |
+| Worker | đủ bộ sec-ch-ua, sec-fetch, accept-language… | `403` sau 3ms |
+| Worker | file `.js` tĩnh, trang gốc của site | `403` sau 3ms |
+
+Với máy thường, streamc chặn theo hình dạng request — đúng UA trình duyệt là
+qua. Với Worker thì chặn sạch cả zone, header gì cũng vậy: request từ Worker
+sang một zone Cloudflare khác không rời mạng đó, và Bot Fight Mode bên nhận
+loại thẳng. Không có mẹo nào đi vòng được từ trong Worker.
+
+Đây là lớp bảo vệ streamc mới bật (cùng đợt với bản `r25` bỏ `data-obf`) —
+trước đó bản trên Workers phát Nguồn C bình thường. Worker giờ tự biết mình
+đang ở đâu (`navigator.userAgent === 'Cloudflare-Workers'`) nên không dựng
+dòng `/hls.m3u8` chết nữa.
 
 Muốn phát được Nguồn C trên bản Workers thì cần một bản addon nữa ở chỗ
 Cloudflare **không** đứng trước — Vercel là đủ, streamc trả lời IP datacenter

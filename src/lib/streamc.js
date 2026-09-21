@@ -178,11 +178,13 @@ export async function diagnose(embed) {
   const origin = new URL(embed).origin;
   const step = async (label, init) => {
     const started = Date.now();
+    const { url = embed, ...rest } = init;
     try {
-      const res = await fetch(embed, { ...init, signal: AbortSignal.timeout(CONFIG.httpTimeout) });
+      const res = await fetch(url, { ...rest, signal: AbortSignal.timeout(CONFIG.httpTimeout) });
       const body = await res.text();
       return {
         label,
+        url,
         status: res.status,
         ms: Date.now() - started,
         server: res.headers.get('server') || null,

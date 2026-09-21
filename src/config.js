@@ -60,6 +60,10 @@ export const CONFIG = {
     .filter(Boolean),
   embedTtl: Number(env.EMBED_TTL || 300) * 1000,
   onWorkers,
+  // Dòng "mở trang" cho những tập không phát được trong Stremio. Mặc định TẮT:
+  // bấm vào nó là bị đá ra trình duyệt, mà người xem mở Stremio lên là để xem
+  // trong Stremio — một dòng không phát được thà đừng có còn hơn.
+  linkRows: bool(env.SHOW_LINK_ROWS, false),
   // Another instance of this addon, somewhere Cloudflare does not front — its
   // /hls.m3u8 is what Nguồn C rows point at when this one is on Workers. A
   // Vercel deployment of this same repo is enough: streamc answers datacenter
