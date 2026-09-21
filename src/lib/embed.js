@@ -9,17 +9,16 @@ import { cached } from './cache.js';
  * URL as `url` makes it try to play markup, so every embed has to become an
  * m3u8/mp4 first — and the ones that cannot are better off as external links.
  *
- * Three ways in, cheapest first:
+ * Two ways in, cheapest first:
  *   1. the player page carries the track in its own query string
  *      (`player.phimapi.com/player/?url=<m3u8>`) — pure string work, no request;
  *   2. the page declares it openly in markup (`file:`, `sources: [...]`,
  *      `<video src>`, a base64 data attribute) — one fetch;
- *   3. streamc.xyz publishes what its own player needs — a signed stream token
- *      and the video hash — in a base64 data attribute, which is enough to
- *      build a playable track through CONFIG.streamcProxy. See fromStreamc.
  *
- * A page that publishes none of the three is out of scope: resolveEmbed returns
- * null and the caller falls back to an external link.
+ * A page that publishes neither is out of scope: resolveEmbed returns null and
+ * the caller falls back to an external link. streamc.xyz (Nguồn C) is one of
+ * those — its markup carries nothing, so it is handled over the site's own API
+ * instead, in lib/streamc.js.
  */
 
 const MEDIA = /https?:\/\/[^\s"'<>\\)]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\)]*)?/i;
@@ -108,57 +107,6 @@ function fromMarkup(html) {
 }
 
 /**
- * streamc.xyz (Nguồn C) -> a track through CONFIG.streamcProxy.
- *
- * The page hands its own player everything it needs in one base64 attribute,
- * `#player[data-obf]`, which decodes to { sUb, hD }: a signed stream token and
- * the video hash. Neither is playable as-is — the playlist behind the token
- * arrives AES-GCM encrypted, and its segments answer 403 to any request without
- * a Referer, which Stremio never sends. So both are handed to the proxy, which
- * returns a plain playlist with every segment rewritten through itself.
- *
- * `t` inside the token is the same value the proxy wants as `key`; if the token
- * ever stops being readable JSON, the key is simply left empty rather than
- * failing the whole resolve.
- */
-function fromStreamc(html, embed) {
-  if (!CONFIG.streamcProxy) return null;
-
-  const attr = /data-obf\s*=\s*["']([A-Za-z0-9+/=]{16,})["']/.exec(html);
-  if (!attr) return null;
-
-  const b64 = (value) => {
-    try {
-      return JSON.parse(Buffer.from(value, 'base64').toString('utf8'));
-    } catch {
-      return null;
-    }
-  };
-
-  const data = b64(attr[1]);
-  const token = String(data?.sUb || '');
-  const hash = String(data?.hD || '');
-  if (!token || !hash) return null;
-
-  const query = new URLSearchParams({
-    url: `${new URL(embed).origin}/${token}.m3u8`,
-    key: String(b64(token)?.t || ''),
-    hash,
-    referer: embed,
-  });
-  const track = `${CONFIG.streamcProxy}/proxy-playlist.m3u8?${query}`;
-
-  // The proxy answers this one without any header, but the site it fronts is
-  // header-gated throughout, so the track is handed over with Nguồn C's own
-  // Referer/Origin attached rather than betting on that staying true.
-  return viaStremioProxy(track, {
-    Referer: `${CONFIG.nguoncApi}/`,
-    'User-Agent': CONFIG.userAgent,
-    Origin: CONFIG.nguoncApi,
-  });
-}
-
-/**
  * Track -> the same track fetched by Stremio's streaming server with headers.
  *
  * Stremio's player sends no Referer of its own, so a host that demands one is
@@ -227,12 +175,6 @@ export async function resolveEmbed(embed) {
       const origin = `${new URL(embed).origin}/`;
       const page = await safe(getText(embed, { referer: origin, fresh: true }), 'embed');
       if (!page?.body) return null;
-
-      // Host-specific first: on a streamc page the generic markup sweep has
-      // nothing correct to find, so letting it guess first only risks a wrong
-      // hit from an unrelated URL sitting in the page.
-      const viaStreamc = fromStreamc(page.body, embed);
-      if (viaStreamc) return { url: viaStreamc, via: 'streamc' };
 
       const hit = fromMarkup(page.body);
       return hit ? { url: hit, via: 'page' } : null;

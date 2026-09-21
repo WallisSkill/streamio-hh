@@ -21,4 +21,10 @@ ENABLE_HH3D = "0"
 
 # Nguồn C không cần NGUONC_PROXY hay NGUONC_UPSTREAM ở đây: request đi ra mang
 # IP của người xem, và nguonc nhận IP dân cư. Đặt vào chỉ tổ thêm một chặng hỏng.
+#
+# Link PHÁT của Nguồn C thì lại không lấy được từ đây: streamc nằm sau
+# Cloudflare và trả 403 cho mọi request từ Worker (đo 21/09/2026). Không có
+# biến dưới đây thì tập Nguồn C ra dạng link mở trang; trỏ nó vào một bản addon
+# ở chỗ khác (Vercel) thì phát được trong Stremio.
+# STREAMC_UPSTREAM = "https://<addon trên vercel>"
 # OVERRIDES = '{"tt0388629":{"kkphim":"dao-hai-tac"}}'

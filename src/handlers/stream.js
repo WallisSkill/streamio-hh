@@ -9,6 +9,7 @@ import { resolveEpisode } from '../lib/episodeMap.js';
 import { baseTitle, titleHead } from '../lib/text.js';
 import { getOverride } from '../lib/overrides.js';
 import { unwrapEmbed, embedFetchable } from '../lib/embed.js';
+import { isStreamc } from '../lib/streamc.js';
 import { MANIFEST } from '../manifest.js';
 
 /**
@@ -267,15 +268,25 @@ function streamsFromEntry(entry, source, target, parsed, wantType, dbg, baseUrl)
     // An embed link is an HTML page and Stremio's player only takes a media
     // track. Most player pages carry that track in their own query string
     // (player.phimapi.com/player/?url=<m3u8>), which costs nothing to read; the
-    // rest are deferred to /resolve so the page is fetched when the user hits
-    // play, not once per server while the list is being built.
+    // rest are deferred to this addon's own /resolve or /hls.m3u8, so the page
+    // is opened when the user hits play — not once per server while the list is
+    // being built, and while any token it hands out is still valid.
     const embed = picked.episode.embed || null;
     const direct = picked.episode.m3u8 || unwrapEmbed(embed);
-    const lazy =
-      !direct && embed && baseUrl && !source.linkOnly && embedFetchable(embed)
-        ? `${baseUrl}/resolve?u=${encodeURIComponent(embed)}`
-        : null;
-    const url = direct || lazy;
+    const deferrable = !direct && embed && baseUrl && !source.linkOnly && embedFetchable(embed);
+    // streamc hands out its playlist over its own API, and every segment in it
+    // has to be rewritten before Stremio can fetch it — so that one is served
+    // as a playlist by this addon instead of resolved to a URL elsewhere.
+    // Nguồn C needs the viewer's streaming server to attach a Referer to each
+    // segment, and a deployment Cloudflare does not front to fetch the playlist
+    // at all — without either, an external link is the honest answer.
+    const hlsBase = CONFIG.streamcUpstream || (CONFIG.onWorkers ? '' : baseUrl);
+    const lazy = !deferrable
+      ? null
+      : isStreamc(embed)
+        ? CONFIG.stremioProxy && hlsBase && `${hlsBase}/hls.m3u8?u=${encodeURIComponent(embed)}`
+        : `${baseUrl}/resolve?u=${encodeURIComponent(embed)}`;
+    const url = direct || lazy || null;
     if (!url && !embed) continue;
 
     const warn = picked.decision.confidence === 'low' ? ' ⚠️' : '';

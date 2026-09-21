@@ -30,12 +30,12 @@ import { parseEpisodeLabel, detectSeason } from '../lib/text.js';
  *
  * Module này chỉ đọc phần API công khai trả về — nó dừng ở embed URL.
  *
- * Việc biến embed URL đó thành link phát được nằm ở `lib/embed.js`
- * (`fromStreamc`): trang embed công bố stream token và video hash trong
- * `#player[data-obf]`, hai giá trị đó được đưa qua `CONFIG.streamcProxy`
- * vì bản thân playlist về ở dạng mã hoá và segment đòi Referer.
+ * Việc biến embed URL đó thành thứ phát được nằm ở `lib/streamc.js`: trang
+ * embed không viết link ra markup, nó cấp playlist qua chính API của mình, và
+ * segment thì đòi Referer — nên addon tự lấy playlist rồi viết lại từng segment
+ * qua server nội bộ của Stremio.
  *
- * Đặt `STREAMC_PROXY=` rỗng thì tập Nguồn C quay lại dạng link mở ngoài.
+ * Đặt `STREMIO_PROXY=` rỗng thì tập Nguồn C quay lại dạng link mở ngoài.
  */
 
 /**

@@ -51,9 +51,9 @@ slug trong `overrides.json` — cách đó vẫn chạy bình thường trên se
 đang chạy serverless. Kiểm bằng `/probe/nguonc` — chạy từ chính deployment
 và báo path nào bị chặn.
 
-Chỉ mỗi **API** bị chặn. Trang embed `*.streamc.xyz` và proxy `sc.k-20.xyz`
-vẫn trả lời IP datacenter bình thường (đã đo trên Vercel), nên chỉ cần đưa
-đúng phần API đi vòng:
+Chỉ mỗi **API** bị chặn. Trang embed `*.streamc.xyz` và CDN segment vẫn trả
+lời IP datacenter bình thường (đã đo trên Vercel), nên chỉ cần đưa đúng phần
+API đi vòng:
 
 ```
 NGUONC_UPSTREAM=https://<addon chạy ở nhà>
@@ -64,15 +64,19 @@ chạy ở nhà, bản đó gọi nguonc bằng IP dân cư rồi trả kết qu
 Đặt biến này cũng tự bật lại Nguồn C trên serverless. Route `/upstream/nguonc`
 chỉ chuyển tiếp `GET /api/...` của nguonc — không phải proxy mở.
 
-Chỉ có dữ liệu API đi đường này; video vẫn đi thẳng từ máy người xem tới
-`sc.k-20.xyz`, không qua nhà bạn và cũng không qua Vercel.
+Chỉ có dữ liệu API đi đường này; video vẫn đi thẳng từ máy người xem tới CDN
+của Nguồn C, không qua nhà bạn và cũng không qua Vercel.
 
 Máy ở nhà tắt thì còn một đường lùi nữa, `NGUONC_PROXY` — một mẫu URL chứa
 `{url}`, thử sau upstream:
 
 ```
-NGUONC_PROXY=https://sc.k-20.xyz/proxy-segment.ts?url={url}&referer=https%3A%2F%2Fphim.nguonc.com%2F
+NGUONC_PROXY=https://<fetcher>/?url={url}
 ```
+
+**Tên miền `sc.k-20.xyz` đã chết** (không phân giải được, đo 21/09/2026). Ví dụ
+cũ dùng nó nên nay không còn dùng được — cần một fetcher khác, hoặc bỏ hẳn
+đường này.
 
 Thứ tự đầy đủ là **upstream → proxy → gọi thẳng**, đường nào trả về dữ liệu
 đúng hình dạng thì dừng ở đó. Một proxy bị chặn vẫn có thể trả 200 kèm trang
@@ -237,7 +241,7 @@ Trả về nguồn đã chọn, điểm khớp, lý do khớp và chế độ đ
 |---|---|---|
 | **KKPhim** (phimapi.com) | Có, m3u8 trực tiếp | Nhiều server: Vietsub / Thuyết Minh / Lồng Tiếng. Tập chỉ có `link_embed` cũng phát được — xem phần link embed bên dưới |
 | **Ophim** (ophim1.com) | **Đang hỏng, tắt mặc định trên Workers** | API trả 404 ở mọi path (đo 28/08/2026), không mirror nào còn sống. Bật lại bằng `ENABLE_OPHIM=1` khi nó hồi phục |
-| **Nguồn C** (phim.nguonc.com) | Có, qua `STREAMC_PROXY` | [API mở](https://phim.nguonc.com/api-document), không cần key. Playlist về ở dạng mã hoá nên phải đi vòng — xem giải thích bên dưới |
+| **Nguồn C** (phim.nguonc.com) | Có, qua `/hls.m3u8` + `STREMIO_PROXY` | [API mở](https://phim.nguonc.com/api-document), không cần key. Trang embed không công bố link phát và segment đòi Referer — xem giải thích bên dưới |
 | **HH3D** (hoathinh3d) | Không — chỉ link mở trang | Xem giải thích bên dưới |
 
 Cả KKPhim và Ophim đều là API JSON công khai, trả `link_m3u8` cho request ẩn
@@ -279,48 +283,69 @@ lấy ra có phải manifest Stremio đọc được không.
 
 ### Nguồn C phát trực tiếp bằng cách nào
 
-Trang embed của Nguồn C (`*.streamc.xyz`) không viết link phát ra ở đâu cả, nên
-bộ giải embed thông thường chạy qua nó không lấy được gì. Link thô cũng không
-dùng được, vì hai lớp sau:
+Trang embed của Nguồn C (`*.streamc.xyz`) không viết link phát ra markup, nên
+bộ giải embed thông thường chạy qua nó không lấy được gì. Từ bản `r25` của
+trang, `#player` là một thẻ rỗng và tất cả nằm sau API của chính trang đó:
 
-- **Manifest về ở dạng mã hoá.** Playlist không phải HLS chuẩn mà là
-  `#EXTM3U` kèm `#ENC-AESGCM;iv=…` và các dòng `#EXT-X-B65:`. Khoá là
-  `HMAC-SHA256("stream-derive-v1", videoHash)` lấy 32 byte đầu, giải AES-256-GCM
-  bằng IV nằm ngay trên dòng đó. Trình phát của Stremio đọc không ra.
-- **Endpoint đòi header.** Segment là MPEG-TS đội lốt `.png`, và host phục vụ
-  chúng xoay vòng (`cyin1.sbs`, `vivurtr.sbs`, `sings2.amass2.top`…). Gọi thẳng
-  trả `403 Access Denied: Missing Referer or Origin headers`, mà Stremio thì
-  không gửi Referer do addon đặt.
+```
+POST embed.php?hash=…  {"action":"bootstrap"}                 -> { bootstrap, turnstileEnabled }
+POST embed.php?hash=…  {"action":"issue", bootstrap, playlist_format}
+                                                              -> { playlist, issuedAt, expiresAt }
+```
 
-Nhưng trang embed **có** công bố hai mảnh mà player của họ cần:
-`#player[data-obf]` là base64 của `{"sUb":"<stream token>","hD":"<video hash>"}`.
-Từ hai giá trị đó, `lib/embed.js` dựng link qua hai lớp:
+Hai chi tiết quyết định link lấy về có dùng được hay không:
 
-1. **`STREAMC_PROXY`** (`sc.k-20.xyz`) — giải playlist và ghi lại từng segment
-   qua chính nó, kèm Referer mà segment host đòi. Ra một m3u8 thường.
-2. **`STREMIO_PROXY`** (`127.0.0.1:11470`) — server nội bộ của Stremio, chạy
-   trên **máy đang xem** chứ không phải máy chạy addon. Nó nhận đích và header
-   ngay trong URL rồi gọi lại đúng như vậy:
+- **`playlist_format`.** Player của họ xin `aesgcm-v2` ở mọi nơi trừ máy Apple,
+  và định dạng đó về ở dạng mã hoá AES-GCM để JS của họ tự giải — Stremio đọc
+  không ra. Xin đúng `hls`, định dạng họ phục vụ Safari, thì nhận được media
+  playlist thường.
+- **Segment.** Là MPEG-TS đội lốt `.png`, nằm trên host xoay vòng (`cyin1.sbs`,
+  `seouls11.amass11.top`…) và trả `403` cho mọi request không có Referer, mà
+  Stremio thì không gửi Referer nào.
 
-   ```
-   http://127.0.0.1:11470/proxy/d=<origin>&h=<Tên:Giá trị>&h=…/<path>?<query>
-   ```
+Nên `lib/streamc.js` tự xin playlist, rồi addon phục vụ lại nó ở
+`/hls.m3u8?u=<embed>` với từng dòng segment được viết qua **`STREMIO_PROXY`**
+(`127.0.0.1:11470`) — server nội bộ của Stremio, chạy trên **máy đang xem** chứ
+không phải máy chạy addon. Nó nhận đích và header ngay trong URL rồi gọi lại
+đúng như vậy:
 
-   Stremio tự viết lại từng dòng segment trong playlist thành `/proxy/…` của nó
-   kèm nguyên bộ header, nên cả manifest lẫn segment đều đi kèm Referer/Origin
-   của Nguồn C. Luồng video không đi qua deployment của addon.
+```
+http://127.0.0.1:11470/proxy/d=<origin>&h=<Tên:Giá trị>&h=…/<path>?<query>
+```
 
-Việc đó chạy trong `/resolve` chứ không phải lúc dựng danh sách stream: token
-trong `sUb` là token ngắn hạn, dựng sớm thì tới lúc bấm phát có thể đã hết hạn.
+Luồng video vì thế đi thẳng từ máy người xem tới CDN của họ, không qua
+deployment của addon; addon chỉ phục vụ đúng file playlist vài chục dòng.
 
-Hiện `sc.k-20.xyz` trả lời cả khi không có header nào, nên lớp 2 là để phòng xa
-chứ chưa bắt buộc — đặt `STREMIO_PROXY=` rỗng thì addon giao thẳng link m3u8,
-chạy được trên cả client không có server nội bộ. Đặt `STREAMC_PROXY=` rỗng thì
-addon không đụng tới hai lớp chặn nữa, và tập Nguồn C quay về dạng link mở đúng
-trang phát của họ.
+Việc đó chạy lúc bấm phát chứ không phải lúc dựng danh sách stream: grant chỉ
+sống vài giờ, dựng sớm thì tới lúc xem có thể đã hết hạn.
 
-Kiểm tra một tập bất kỳ bằng `/probe/embed` — `resolved.via` sẽ là `streamc` và
-`media.kind` là `hls` khi đường này còn chạy.
+**Trên Cloudflare Workers đường này không chạy.** streamc cũng nằm sau
+Cloudflare, và request từ Worker sang một zone Cloudflare khác không rời mạng
+đó — streamc trả `403` sau đúng 5ms cho cả GET lẫn POST (đo 21/09/2026), y
+như chuyện đã xảy ra với relay nguonc. Worker tự biết mình đang ở đâu
+(`navigator.userAgent === 'Cloudflare-Workers'`) nên nó không dựng dòng
+`/hls.m3u8` chết: tập Nguồn C ra dạng link mở trang.
+
+Muốn phát được Nguồn C trên bản Workers thì cần một bản addon nữa ở chỗ
+Cloudflare **không** đứng trước — Vercel là đủ, streamc trả lời IP datacenter
+bình thường — rồi trỏ Worker vào đó:
+
+```
+STREAMC_UPSTREAM=https://<addon trên vercel>
+```
+
+Worker vẫn lo phần API nguonc (nó cần IP dân cư), bản kia chỉ lo mỗi
+`/hls.m3u8`. Không đặt biến này thì Nguồn C là link mở trang, các nguồn khác
+không ảnh hưởng.
+
+`turnstileEnabled` là công tắc Cloudflare Turnstile của chính trang đó. Lúc
+viết dòng này nó đang tắt; khi bật thì grant đòi một challenge đã giải, addon
+**không** làm việc đó — nó trả null và tập Nguồn C quay về dạng link mở trang
+phát của họ. Đặt `STREMIO_PROXY=` rỗng cũng cho kết quả tương tự, vì không còn
+ai gắn Referer hộ segment nữa.
+
+Kiểm tra một tập bất kỳ bằng `/probe/embed` — với embed streamc nó báo grant có
+về không, playlist có bao nhiêu segment, và segment đầu tiên tải được hay không.
 
 ### Vì sao HH3D không phát trực tiếp được
 

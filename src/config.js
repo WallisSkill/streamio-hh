@@ -7,6 +7,14 @@ const bool = (v, d) => (v === undefined ? d : !/^(0|false|no)$/i.test(String(v))
 // and ON otherwise; an explicit ENABLE_NGUONC always wins.
 const onServerless = Boolean(env.VERCEL || env.AWS_LAMBDA_FUNCTION_NAME || env.NETLIFY);
 
+// Cloudflare Workers identifies itself here, and it matters for one reason:
+// streamc.xyz sits behind Cloudflare, and a request from a Worker to another
+// Cloudflare zone never leaves that network — streamc's edge answers 403 in 5ms
+// to both GET and POST (đo 21/09/2026), so this deployment cannot fetch a
+// Nguồn C playlist itself no matter what headers it sends. Its episodes fall
+// back to an external link unless STREAMC_UPSTREAM names somewhere that can.
+const onWorkers = globalThis.navigator?.userAgent === 'Cloudflare-Workers';
+
 const nguoncApi = (env.NGUONC_API || 'https://phim.nguonc.com').replace(/[/]+$/, '');
 
 // A second instance of this addon running on a home connection, which forwards
@@ -51,16 +59,18 @@ export const CONFIG = {
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean),
   embedTtl: Number(env.EMBED_TTL || 300) * 1000,
-  // Nguồn C serves its playlist AES-GCM encrypted, and its segments answer 403
-  // to any request without a Referer — so the raw track is unplayable in
-  // Stremio on both counts. This proxy decrypts the playlist and rewrites every
-  // segment through itself, carrying the Referer the segment host demands.
-  // Empty disables it: streamc episodes then fall back to an external link.
-  streamcProxy: (env.STREAMC_PROXY ?? 'https://sc.k-20.xyz').replace(/\/+$/, ''),
+  onWorkers,
+  // Another instance of this addon, somewhere Cloudflare does not front — its
+  // /hls.m3u8 is what Nguồn C rows point at when this one is on Workers. A
+  // Vercel deployment of this same repo is enough: streamc answers datacenter
+  // IPs, it only refuses Worker traffic.
+  streamcUpstream: (env.STREAMC_UPSTREAM || '').replace(/[/]+$/, ''),
   // Stremio's own streaming server, running on the machine that plays the
   // video — 127.0.0.1 here means the viewer's machine, not this deployment's.
-  // Wrapping the track in it makes Stremio fetch the track with the Referer and
-  // Origin of the site it came from. Empty hands over the bare URL instead.
+  // Wrapping a URL in it makes Stremio fetch that URL with the Referer and
+  // Origin of the site it came from. Empty hands over the bare URL instead —
+  // which also switches Nguồn C back to external links, because its segments
+  // answer 403 to any request carrying no Referer and Stremio sends none.
   stremioProxy: (env.STREMIO_PROXY ?? 'http://127.0.0.1:11470').replace(/\/+$/, ''),
   cacheTtl: Number(env.CACHE_TTL || 1800) * 1000,
   cinemeta: 'https://v3-cinemeta.strem.io',

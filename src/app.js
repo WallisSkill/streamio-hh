@@ -3,6 +3,7 @@ import { MANIFEST } from './manifest.js';
 import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
 import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
+import { isStreamc, issuePlaylist, playlistFor, diagnose } from './lib/streamc.js';
 import { routesTo } from './sources/nguonc.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
@@ -241,12 +242,79 @@ export async function handleRequest(req, res) {
       return res.end();
     }
 
+    /**
+     * /hls.m3u8?u=<embed url> — a Nguồn C episode as a playlist.
+     *
+     * streamc publishes no track in its page: the playlist is granted over the
+     * page's own API, and its segments are MPEG-TS named .png on a host that
+     * answers 403 without a Referer. So the playlist is fetched here and served
+     * with every segment pointed at the viewer's own streaming server, which is
+     * what can attach that Referer. See lib/streamc.js.
+     */
+    if (path === '/hls.m3u8') {
+      const u = url?.searchParams?.get('u') || '';
+      if (!u || !isStreamc(u) || !embedFetchable(u)) {
+        return send(res, 400, { err: 'chỉ nhận embed của streamc.xyz', embed: u || null });
+      }
+      let playlist;
+      try {
+        playlist = await playlistFor(u);
+      } catch (err) {
+        return send(res, 502, { err: err.message, embed: u });
+      }
+      if (!playlist) return send(res, 502, { err: 'streamc không cấp playlist phát được', embed: u });
+      res.writeHead(200, {
+        ...CORS,
+        'content-type': 'application/vnd.apple.mpegurl; charset=utf-8',
+        // The grant inside is short-lived, and a stale copy is a dead playlist.
+        'cache-control': 'no-store',
+      });
+      return res.end(playlist.body);
+    }
+
     // /probe/embed?u=<embed url> — why a given embed can or cannot be played
     // inside Stremio: what the query string carries, what the page declares,
     // and whether the track that comes out is a manifest Stremio can read.
     if (path === '/probe/embed') {
       const u = url?.searchParams?.get('u') || '';
       if (!u) return send(res, 400, { err: 'thiếu ?u=<embed url>' });
+
+      // streamc never resolves to a single URL — it is served as a playlist by
+      // /hls.m3u8 — so what gets reported is whether the grant came through and
+      // whether the first segment behind it can actually be fetched.
+      if (isStreamc(u)) {
+        const grant = await issuePlaylist(u).catch((err) => ({ error: err.message }));
+        const steps = grant?.playlist ? undefined : (await diagnose(u)).steps;
+        let playlist = null;
+        let media = null;
+        if (grant?.playlist) {
+          playlist = await playlistFor(u).catch((err) => ({ error: err.message }));
+          const first = String(playlist?.body || '')
+            .split(/\r?\n/)
+            .find((line) => /^https?:/.test(line));
+          if (first) media = await inspectMedia(first);
+        }
+        return send(res, 200, {
+          embed: u,
+          hostAllowed: embedFetchable(u),
+          grant: grant?.error ? grant : grant && { format: grant.format, expiresAt: grant.expiresAt },
+          steps,
+          segments: playlist?.body ? playlist.body.split(/\r?\n/).filter((l) => /^https?:/.test(l)).length : 0,
+          firstSegment: media,
+          stremioProxy: CONFIG.stremioProxy || null,
+          streamcUpstream: CONFIG.streamcUpstream || null,
+          verdict: !grant?.playlist
+            ? CONFIG.onWorkers && !CONFIG.streamcUpstream
+              ? 'deployment này chạy trên Workers: Cloudflare của streamc chặn mọi request từ Worker → đặt STREAMC_UPSTREAM hoặc chịu link ngoài'
+              : 'streamc không cấp playlist (có thể đã bật Turnstile) → chỉ mở link ngoài'
+            : !CONFIG.stremioProxy
+              ? 'có playlist nhưng STREMIO_PROXY rỗng → segment sẽ 403, addon trả link ngoài'
+              : media?.status === 200 || media?.status === 206
+                ? 'phát được trong Stremio (qua server nội bộ của Stremio)'
+                : `có playlist nhưng segment không tải được (${media?.status ?? media?.error})`,
+        });
+      }
+
       const hit = await resolveEmbed(u);
       const media = hit ? await inspectMedia(hit.url) : null;
       return send(res, 200, {
