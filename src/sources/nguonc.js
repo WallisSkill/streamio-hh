@@ -386,6 +386,16 @@ export default {
   label: 'Nguồn C',
 
   /**
+   * Một truy vấn một lúc.
+   *
+   * nguonc trả 429 cho cả loạt sáu truy vấn gửi cùng lúc, và mất truy vấn nào
+   * thì mất luôn phim khớp bằng đúng truy vấn đó — đo trên Cloudflare Workers
+   * ngày 21/09/2026: 4/6 truy vấn bị 429 và Đại Chúa Tể biến mất khỏi danh
+   * sách stream dù API vẫn trả lời 200 cho từng lệnh gọi riêng lẻ.
+   */
+  searchConcurrency: 1,
+
+  /**
    * false:
    * player được phép sử dụng embed URL.
    */

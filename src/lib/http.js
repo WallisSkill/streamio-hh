@@ -21,6 +21,23 @@ async function raw(url, { timeout = CONFIG.httpTimeout, referer, headers = {} } 
   }
 }
 
+/** An HTTP status the caller can branch on, not just a message to log. */
+function httpError(res, url) {
+  const err = new Error(`HTTP ${res.status} for ${url}`);
+  err.status = res.status;
+  err.retryAfter = Number(res.headers.get('retry-after')) || null;
+  return err;
+}
+
+/**
+ * Retry the hiccups, not the answers.
+ *
+ * A 4xx is a decision: the same request 400ms later gets the same 403 or 404,
+ * so retrying it only doubles the load on a host that is already saying no —
+ * and when that no is 429, doubling it is exactly what keeps it saying no.
+ * 429 and 408 are the two that do mean "later", so those wait instead: as long
+ * as the host asked for, capped, because a stream request cannot hang on it.
+ */
 async function withRetry(fn, tries = 2) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
@@ -28,7 +45,14 @@ async function withRetry(fn, tries = 2) {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (i < tries - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+      if (i >= tries - 1) break;
+      const status = err.status;
+      if (status && status < 500 && status !== 429 && status !== 408) break;
+      const wait =
+        status === 429 || status === 408
+          ? Math.min(2500, (err.retryAfter || 1.2) * 1000)
+          : 400 * (i + 1);
+      await new Promise((r) => setTimeout(r, wait));
     }
   }
   throw lastErr;
@@ -41,7 +65,7 @@ export async function getJson(url, opts = {}) {
   return cached(`json:${url}`, () =>
     withRetry(async () => {
       const res = await raw(url, rest);
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      if (!res.ok) throw httpError(res, url);
       return res.json();
     }, tries),
   );
@@ -51,7 +75,7 @@ export async function getText(url, opts = {}) {
   const fetchIt = () =>
     withRetry(async () => {
       const res = await raw(url, opts);
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      if (!res.ok) throw httpError(res, url);
       return { body: await res.text(), finalUrl: res.url };
     });
   // Player pages hand out short-lived tokens, so `fresh` keeps them out of the

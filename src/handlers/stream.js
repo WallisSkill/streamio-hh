@@ -125,9 +125,36 @@ function buildQueries(target, season) {
   return [...seen.values()].slice(0, CONFIG.maxQueries);
 }
 
+/**
+ * Run tasks with at most `limit` of them in flight.
+ *
+ * Firing every query at once is free on a source that does not count them, and
+ * fatal on one that does: nguonc answers 429 to a burst of six searches from
+ * the same caller, and the addon then reports "no match" for a film the source
+ * has. Sources that need pacing say so with `searchConcurrency`.
+ */
+async function pooled(tasks, limit) {
+  if (!Number.isFinite(limit) || limit >= tasks.length) return Promise.all(tasks.map((t) => t()));
+
+  const out = new Array(tasks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      out[i] = await tasks[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, limit) }, worker));
+  return out;
+}
+
 async function gatherFrom(source, target, season) {
   const seen = new Map();
-  const results = await Promise.all(buildQueries(target, season).map((q) => source.search(q, 20)));
+  const queries = buildQueries(target, season);
+  const results = await pooled(
+    queries.map((q) => () => source.search(q, 20)),
+    source.searchConcurrency ?? Infinity,
+  );
   for (const list of results) for (const c of list) if (!seen.has(c.slug)) seen.set(c.slug, c);
   return [...seen.values()];
 }
