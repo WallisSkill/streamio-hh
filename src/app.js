@@ -3,7 +3,7 @@ import { MANIFEST } from './manifest.js';
 import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
 import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
-import { isStreamc, issuePlaylist, playlistFor, diagnose } from './lib/streamc.js';
+import { isStreamc, playlistOf, diagnose } from './lib/streamc.js';
 import { routesTo } from './sources/nguonc.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
@@ -258,7 +258,7 @@ export async function handleRequest(req, res) {
       }
       let playlist;
       try {
-        playlist = await playlistFor(u);
+        playlist = await playlistOf(u);
       } catch (err) {
         return send(res, 502, { err: err.message, embed: u });
       }
@@ -267,7 +267,9 @@ export async function handleRequest(req, res) {
         ...CORS,
         'content-type': 'application/vnd.apple.mpegurl; charset=utf-8',
         // The grant inside is short-lived, and a stale copy is a dead playlist.
-        'cache-control': 'no-store',
+        // Playlist dựng từ CDN không mang token nên cache được; bản do streamc
+        // cấp thì hết hạn sau vài giờ, và một bản cũ là một playlist chết.
+        'cache-control': playlist.via === 'cdn' ? 'public, max-age=0, s-maxage=1800' : 'no-store',
       });
       return res.end(playlist.body);
     }
@@ -283,34 +285,30 @@ export async function handleRequest(req, res) {
       // /hls.m3u8 — so what gets reported is whether the grant came through and
       // whether the first segment behind it can actually be fetched.
       if (isStreamc(u)) {
-        const grant = await issuePlaylist(u).catch((err) => ({ error: err.message }));
-        const steps = grant?.playlist ? undefined : (await diagnose(u)).steps;
-        let playlist = null;
-        let media = null;
-        if (grant?.playlist) {
-          playlist = await playlistFor(u).catch((err) => ({ error: err.message }));
-          const first = String(playlist?.body || '')
-            .split(/\r?\n/)
-            .find((line) => /^https?:/.test(line));
-          if (first) media = await inspectMedia(first);
-        }
+        const playlist = await playlistOf(u).catch((err) => ({ error: err.message }));
+        const lines = String(playlist?.body || '').split(/\r?\n/);
+        const first = lines.find((line) => /^https?:/.test(line));
+        const media = first ? await inspectMedia(first) : null;
+        // Không lấy được gì thì mới cần biết ai từ chối, ở bước nào.
+        const steps = playlist?.body ? undefined : (await diagnose(u)).steps;
+        const ok = media?.status === 200 || media?.status === 206;
+
         return send(res, 200, {
           embed: u,
           hostAllowed: embedFetchable(u),
-          grant: grant?.error ? grant : grant && { format: grant.format, expiresAt: grant.expiresAt },
-          steps,
-          segments: playlist?.body ? playlist.body.split(/\r?\n/).filter((l) => /^https?:/.test(l)).length : 0,
+          via: playlist?.via || null,
+          host: playlist?.host,
+          segments: lines.filter((l) => /^https?:/.test(l)).length,
+          segmentSeconds: playlist?.each,
           firstSegment: media,
+          steps,
           stremioProxy: CONFIG.stremioProxy || null,
-          streamcUpstream: CONFIG.streamcUpstream || null,
-          verdict: !grant?.playlist
-            ? CONFIG.onWorkers && !CONFIG.streamcUpstream
-              ? 'deployment này chạy trên Workers: Cloudflare của streamc chặn mọi request từ Worker → đặt STREAMC_UPSTREAM hoặc chịu link ngoài'
-              : 'streamc không cấp playlist (có thể đã bật Turnstile) → chỉ mở link ngoài'
+          verdict: !playlist?.body
+            ? 'không dựng được playlist — xem steps'
             : !CONFIG.stremioProxy
-              ? 'có playlist nhưng STREMIO_PROXY rỗng → segment sẽ 403, addon trả link ngoài'
-              : media?.status === 200 || media?.status === 206
-                ? 'phát được trong Stremio (qua server nội bộ của Stremio)'
+              ? 'có playlist nhưng STREMIO_PROXY rỗng → segment sẽ 403'
+              : ok
+                ? `phát được trong Stremio (playlist: ${playlist.via})`
                 : `có playlist nhưng segment không tải được (${media?.status ?? media?.error})`,
         });
       }
@@ -329,6 +327,34 @@ export async function handleRequest(req, res) {
             ? `có link nhưng không phát được (${media?.kind})`
             : 'trang embed không công bố link phát → chỉ mở link ngoài',
       });
+    }
+
+    // /probe/seg?u=<segment url>&r=<referer> — liệu deployment này có gọi được CDN
+    // segment hay không. Câu hỏi riêng, vì CDN đó là tên miền khác với trang
+    // embed và có thể không nằm sau cùng một lớp chặn.
+    if (path === '/probe/seg') {
+      const u = url?.searchParams?.get('u') || '';
+      const r = url?.searchParams?.get('r') || '';
+      if (!u) return send(res, 400, { err: 'thiếu ?u=' });
+      const started = Date.now();
+      try {
+        const hit = await fetch(u, {
+          headers: { 'user-agent': CONFIG.userAgent, range: 'bytes=0-15', ...(r ? { referer: r } : {}) },
+          signal: AbortSignal.timeout(CONFIG.httpTimeout),
+        });
+        const buf = new Uint8Array(await hit.arrayBuffer());
+        return send(res, 200, {
+          url: u,
+          status: hit.status,
+          ms: Date.now() - started,
+          server: hit.headers.get('server') || null,
+          contentType: hit.headers.get('content-type') || null,
+          bytes: buf.length,
+          isTs: buf[0] === 0x47,
+        });
+      } catch (err) {
+        return send(res, 200, { url: u, status: null, ms: Date.now() - started, error: err.message });
+      }
     }
 
     // /probe/nguonc — run FROM this deployment's IP and report each nguonc

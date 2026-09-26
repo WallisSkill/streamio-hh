@@ -277,10 +277,10 @@ function streamsFromEntry(entry, source, target, parsed, wantType, dbg, baseUrl)
     // streamc hands out its playlist over its own API, and every segment in it
     // has to be rewritten before Stremio can fetch it — so that one is served
     // as a playlist by this addon instead of resolved to a URL elsewhere.
-    // Nguồn C needs the viewer's streaming server to attach a Referer to each
-    // segment, and a deployment Cloudflare does not front to fetch the playlist
-    // at all — without either, an external link is the honest answer.
-    const hlsBase = CONFIG.streamcUpstream || (CONFIG.onWorkers ? '' : baseUrl);
+    // Nguồn C chỉ cần server nội bộ của Stremio để gắn Referer cho từng
+    // segment. Còn playlist thì lấy được ở cả trên Workers: streamc chặn Worker
+    // nhưng CDN chứa segment của họ thì không (xem lib/streamc.js).
+    const hlsBase = CONFIG.streamcUpstream || baseUrl;
     const lazy = !deferrable
       ? null
       : isStreamc(embed)

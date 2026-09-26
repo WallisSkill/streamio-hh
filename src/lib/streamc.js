@@ -163,7 +163,7 @@ export async function playlistFor(embed) {
   if (!/^#EXTM3U/.test(text.trim())) throw new Error('streamc playlist: không phải m3u8');
   if (/#EXT-X-STREAM-INF/.test(text)) return null;
 
-  return { body: rewrite(text, issued.playlist, referer), issued };
+  return { body: rewrite(text, issued.playlist, referer), via: 'grant', issued };
 }
 
 /**
@@ -213,4 +213,251 @@ export async function diagnose(embed) {
     body: JSON.stringify({ action: 'bootstrap', referrer: `${CONFIG.nguoncApi}/`, frame_origins: frames() }),
   });
   return { steps: [page, boot] };
+}
+
+/**
+ * Dựng playlist từ CDN, không qua streamc.
+ *
+ * Vì sao phải có đường này: Cloudflare Workers không gọi được streamc — zone đó
+ * chặn sạch traffic đi từ Worker (403 sau 3ms, kể cả file .js tĩnh, kể cả khi
+ * giả đủ bộ header trình duyệt). Nhưng CDN chứa segment lại là tên miền khác và
+ * Worker gọi được bình thường, nên playlist có thể dựng lại từ đó.
+ *
+ * Ba mảnh cần có, và cách lấy từng mảnh:
+ *
+ *   • Đường dẫn. Segment nằm ở `https://<host>/<hash>/streamaaa0000.png`, với
+ *     `hash` chính là tham số hash trong URL embed — thứ API nguonc đã trả về.
+ *     Đánh số liên tục từ 0000, là MPEG-TS đội lốt .png.
+ *   • Host. Mỗi server embed có đúng một CDN của nó (đo 22/09/2026, bảng dưới).
+ *     Một video chỉ nằm trên một host — các host không dùng chung dữ liệu, nên
+ *     host sai thì 404 và phải dò tiếp cả danh sách.
+ *   • Số đoạn và độ dài. Không nơi nào công bố, nên đo: số đoạn bằng cách dò
+ *     nhị phân xem segment thứ n có tồn tại không, độ dài bằng cách đọc mốc
+ *     thời gian PCR trong chính file TS.
+ *
+ * Playlist dựng ra không mang token nào — link CDN không hết hạn — nên nó cache
+ * được lâu, khác với playlist do streamc cấp (4 giờ).
+ *
+ * Đánh đổi phải nói rõ: độ dài mỗi đoạn là số đo trung bình của mấy đoạn mẫu,
+ * không phải số thật của từng đoạn. Phim phát đúng và liền mạch, nhưng tổng
+ * thời lượng lệch được vài phần trăm và tua tới thì lệch trong khoảng một đoạn.
+ * Muốn đúng từng đoạn thì phải lấy playlist thật từ streamc, và Worker không
+ * gọi được.
+ */
+
+/** Server embed -> CDN chứa segment của nó. Ghi đè bằng STREAMC_SEGMENT_HOSTS. */
+const SEGMENT_HOSTS = {
+  embed1: 'aninnn.hihihoho1.top',
+  embed2: 'sings2.amass2.top',
+  embed10: 'sings10.amass2.top',
+  embed11: 'seouls11.amass11.top',
+  embed12: 'cyin1.sbs',
+  embed13: 'thais.hihihoho3.top',
+  embed14: 'jps14.hihihoho4.top',
+  embed15: 'indoss15.amass15.top',
+  embed17: 'saus17.amass17.top',
+  embed18: 'phili18.amass15.top',
+};
+
+function hostTable() {
+  const extra = String(CONFIG.streamcSegmentHosts || '')
+    .split(',')
+    .map((pair) => pair.split('=').map((s) => s.trim()))
+    .filter(([key, value]) => key && value);
+  return { ...SEGMENT_HOSTS, ...Object.fromEntries(extra) };
+}
+
+const segmentUrl = (host, hash, i) =>
+  `https://${host}/${hash}/streamaaa${String(i).padStart(4, '0')}.png`;
+
+/** Segment thứ `i` có tồn tại không. Xin 1 byte, vì chỉ cần status. */
+async function segmentExists(host, hash, i, referer) {
+  try {
+    const res = await fetch(segmentUrl(host, hash, i), {
+      headers: { 'user-agent': CONFIG.userAgent, referer, range: 'bytes=0-0' },
+      signal: AbortSignal.timeout(CONFIG.httpTimeout),
+    });
+    return res.status === 200 || res.status === 206;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * CDN nào đang giữ video này.
+ *
+ * Thử host trong bảng trước — đúng gần như mọi lần và chỉ tốn một request. Sai
+ * thì video đã bị chuyển host (họ đổi CDN theo thời gian), nên dò cả danh sách
+ * một lượt song song thay vì bỏ cuộc.
+ */
+async function findHost(embed, hash, referer) {
+  const table = hostTable();
+  const server = new URL(embed).hostname.split('.')[0];
+  const mapped = table[server];
+
+  if (mapped && (await segmentExists(mapped, hash, 0, referer))) return mapped;
+
+  const rest = [...new Set(Object.values(table))].filter((h) => h !== mapped);
+  const hits = await Promise.all(
+    rest.map(async (h) => ((await segmentExists(h, hash, 0, referer)) ? h : null)),
+  );
+  return hits.find(Boolean) || null;
+}
+
+/**
+ * Có bao nhiêu đoạn.
+ *
+ * Nhân đôi để khoanh vùng — làm song song vì sáu lần thử tuần tự là sáu vòng
+ * chờ mạng — rồi dò nhị phân trong khoảng đã khoanh. Khoảng 17 request cho một
+ * phim 300 đoạn, và kết quả được cache nên chỉ tốn ở lần bấm đầu.
+ */
+async function countSegments(host, hash, referer) {
+  const marks = [64, 128, 256, 512, 1024, 2048];
+  const found = await Promise.all(marks.map((n) => segmentExists(host, hash, n, referer)));
+
+  let lo = 0;
+  let hi = marks[0];
+  for (let i = 0; i < marks.length; i++) {
+    if (found[i]) {
+      lo = marks[i];
+      hi = marks[i + 1] ?? marks[i] * 2;
+    }
+  }
+
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (await segmentExists(host, hash, mid, referer)) lo = mid;
+    else hi = mid;
+  }
+  return lo + 1;
+}
+
+/**
+ * Mốc thời gian PCR trong một khối byte TS.
+ *
+ * Phải căn lưới trước: gói TS dài 188 byte và mở đầu bằng 0x47, nhưng 0x47 cũng
+ * xuất hiện đầy trong payload — không căn thì đọc nhầm rác thành mốc thời gian
+ * (đã đo: ra 80000 giây cho một phim 20 phút).
+ */
+function readPcrs(buf) {
+  let base = -1;
+  for (let o = 0; o < 188 && o + 188 * 5 < buf.length; o++) {
+    let aligned = true;
+    for (let k = 0; k < 5; k++) {
+      if (buf[o + k * 188] !== 0x47) {
+        aligned = false;
+        break;
+      }
+    }
+    if (aligned) {
+      base = o;
+      break;
+    }
+  }
+  if (base < 0) return [];
+
+  const out = [];
+  for (let i = base; i + 188 <= buf.length; i += 188) {
+    const adaptation = (buf[i + 3] >> 4) & 0x03;
+    if (adaptation !== 2 && adaptation !== 3) continue;
+    if (buf[i + 4] < 7) continue;
+    if (!(buf[i + 5] & 0x10)) continue; // PCR_flag
+    const b = buf.subarray(i + 6);
+    const ticks = b[0] * 2 ** 25 + b[1] * 2 ** 17 + b[2] * 2 ** 9 + b[3] * 2 + (b[4] >> 7);
+    out.push(ticks / 90000);
+  }
+  return out;
+}
+
+/** Độ dài một đoạn: mốc cuối trừ mốc đầu của chính file đó. */
+async function segmentSeconds(host, hash, i, referer) {
+  const grab = async (range) => {
+    try {
+      const res = await fetch(segmentUrl(host, hash, i), {
+        headers: { 'user-agent': CONFIG.userAgent, referer, range },
+        signal: AbortSignal.timeout(CONFIG.httpTimeout),
+      });
+      if (!res.ok) return [];
+      return readPcrs(new Uint8Array(await res.arrayBuffer()));
+    } catch {
+      return [];
+    }
+  };
+  // 64 KB mỗi đầu: theo chuẩn thì PCR phải xuất hiện ít nhất mỗi 100ms, nhưng
+  // cửa sổ 9 KB đã đo là có lúc không chứa mốc nào.
+  const [head, tail] = await Promise.all([grab('bytes=0-65535'), grab('bytes=-65536')]);
+  if (!head.length || !tail.length) return null;
+  const seconds = tail[tail.length - 1] - head[0];
+  return seconds > 0 && seconds < 60 ? seconds : null;
+}
+
+/**
+ * Playlist cho một embed, đường nào lấy được thì dùng đường đó.
+ *
+ * Playlist thật của streamc là bản đúng từng đoạn, nên thử trước — chạy được ở
+ * máy nhà và trên mọi host Cloudflare không chặn. Thất bại thì dựng lại từ CDN,
+ * đường duy nhất còn sống trên Workers.
+ */
+export async function playlistOf(embed) {
+  try {
+    const real = await playlistFor(embed);
+    if (real) return real;
+  } catch {
+    // Không cần biết vì sao: bước sau không phụ thuộc bước này.
+  }
+  return playlistFromCdn(embed);
+}
+
+/** Playlist dựng từ CDN cho một embed, hoặc null nếu không tìm ra video. */
+export async function playlistFromCdn(embed) {
+  return cached(
+    `streamc:cdn:${embed}`,
+    async () => {
+      const hash = new URL(embed).searchParams.get('hash');
+      if (!hash) return null;
+      const referer = `${new URL(embed).origin}/`;
+
+      const host = await findHost(embed, hash, referer);
+      if (!host) return null;
+
+      const count = await countSegments(host, hash, referer);
+
+      // Mẫu rải khắp phim: đoạn cuối thường ngắn hơn hẳn nên đo riêng, còn lại
+      // lấy trung bình của mấy đoạn giữa.
+      const picks = [...new Set([0, count >> 2, count >> 1, (count * 3) >> 2])].filter(
+        (i) => i < count - 1,
+      );
+      const samples = (
+        await Promise.all(picks.map((i) => segmentSeconds(host, hash, i, referer)))
+      ).filter((v) => v != null);
+      const last = count > 1 ? await segmentSeconds(host, hash, count - 1, referer) : null;
+
+      const each = samples.length ? samples.reduce((a, b) => a + b, 0) / samples.length : 10;
+      const target = Math.ceil(Math.max(each, last ?? 0));
+
+      const lines = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-PLAYLIST-TYPE:VOD',
+        `#EXT-X-TARGETDURATION:${target}`,
+        '#EXT-X-MEDIA-SEQUENCE:0',
+      ];
+      for (let i = 0; i < count; i++) {
+        const seconds = i === count - 1 && last ? last : each;
+        lines.push(`#EXTINF:${seconds.toFixed(6)},`);
+        lines.push(viaStremioProxy(segmentUrl(host, hash, i), { Referer: referer }));
+      }
+      lines.push('#EXT-X-ENDLIST');
+
+      return {
+        body: lines.join('\n'),
+        via: 'cdn',
+        host,
+        count,
+        each: Number(each.toFixed(3)),
+        sampled: samples.length,
+      };
+    },
+    CONFIG.cacheTtl,
+  );
 }

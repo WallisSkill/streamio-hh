@@ -319,7 +319,7 @@ deployment của addon; addon chỉ phục vụ đúng file playlist vài chục
 Việc đó chạy lúc bấm phát chứ không phải lúc dựng danh sách stream: grant chỉ
 sống vài giờ, dựng sớm thì tới lúc xem có thể đã hết hạn.
 
-**Trên Cloudflare Workers đường này không chạy** — và không phải vì header.
+**Trên Cloudflare Workers không gọi được streamc** — và không phải vì header.
 Đo ngày 22/09/2026, cùng một URL embed:
 
 | Gọi từ | Header | Kết quả |
@@ -328,29 +328,50 @@ sống vài giờ, dựng sớm thì tới lúc xem có thể đã hết hạn.
 | Máy thường | UA trình duyệt | `200` |
 | Worker | UA trình duyệt | `403` sau 3ms |
 | Worker | đủ bộ sec-ch-ua, sec-fetch, accept-language… | `403` sau 3ms |
-| Worker | file `.js` tĩnh, trang gốc của site | `403` sau 3ms |
+| Worker | file `.js` tĩnh, cả trang gốc của site | `403` sau 3ms |
 
-Với máy thường, streamc chặn theo hình dạng request — đúng UA trình duyệt là
-qua. Với Worker thì chặn sạch cả zone, header gì cũng vậy: request từ Worker
-sang một zone Cloudflare khác không rời mạng đó, và Bot Fight Mode bên nhận
-loại thẳng. Không có mẹo nào đi vòng được từ trong Worker.
+Hai kiểu chặn khác nhau. Với máy thường, streamc lọc theo hình dạng request —
+đúng UA trình duyệt là qua. Với Worker thì chặn sạch cả zone, kể cả file tĩnh:
+request từ Worker sang zone Cloudflare khác không rời mạng đó và bị loại ngay ở
+biên. Giả header không cứu được. Lớp này streamc mới bật (cùng đợt `r25`) —
+trước đó bản trên Workers phát Nguồn C bình thường.
 
-Đây là lớp bảo vệ streamc mới bật (cùng đợt với bản `r25` bỏ `data-obf`) —
-trước đó bản trên Workers phát Nguồn C bình thường. Worker giờ tự biết mình
-đang ở đâu (`navigator.userAgent === 'Cloudflare-Workers'`) nên không dựng
-dòng `/hls.m3u8` chết nữa.
+### Dựng lại playlist từ CDN
 
-Muốn phát được Nguồn C trên bản Workers thì cần một bản addon nữa ở chỗ
-Cloudflare **không** đứng trước — Vercel là đủ, streamc trả lời IP datacenter
-bình thường — rồi trỏ Worker vào đó:
+Nhưng CDN chứa segment là tên miền khác (`cyin1.sbs`, `seouls11.amass11.top`…)
+và **Worker gọi được bình thường** — 206, đúng bytes MPEG-TS. Nên playlist dựng
+lại được mà không cần đụng tới streamc. Ba mảnh, ba cách lấy:
 
-```
-STREAMC_UPSTREAM=https://<addon trên vercel>
-```
+- **Đường dẫn.** Segment nằm ở `https://<host>/<hash>/streamaaa0000.png`, đánh
+  số liên tục, và `hash` chính là tham số hash trong URL embed — thứ API nguonc
+  đã trả về rồi.
+- **Host.** Mỗi server embed có đúng một CDN của nó, quan hệ 1:1 (bảng trong
+  `lib/streamc.js`, đo trên 10 server). Một video chỉ nằm trên một host, các
+  host không dùng chung dữ liệu — nên host trong bảng sai thì dò cả danh sách.
+  Họ đổi CDN thì ghi đè bằng `STREAMC_SEGMENT_HOSTS="embed12=host,…"`.
+- **Số đoạn và độ dài.** Không ai công bố, nên đo. Số đoạn: khoanh vùng bằng
+  cách nhân đôi rồi dò nhị phân xem segment thứ n có tồn tại không (~17 request
+  cho phim 300 đoạn). Độ dài: đọc mốc thời gian PCR trong chính file TS, lấy 64
+  KB đầu và 64 KB cuối của mấy đoạn mẫu.
 
-Worker vẫn lo phần API nguonc (nó cần IP dân cư), bản kia chỉ lo mỗi
-`/hls.m3u8`. Không đặt biến này thì Nguồn C là link mở trang, các nguồn khác
-không ảnh hưởng.
+Đo lại bằng ffprobe (đúng bản ffmpeg Stremio dùng), qua đúng đường Stremio đi —
+Worker trả playlist, segment vòng qua server nội bộ của Stremio để có Referer:
+
+| Phim | Số đoạn dựng ra / thật | Tổng thời lượng dựng ra / thật |
+|---|---|---|
+| Đại Chúa Tể (embed12) | 123 / 123 | 1219.3s / 1224.2s |
+| Thôn Phệ Tinh Không (embed13) | 312 / 312 | 925.7s / 933.7s |
+| embed11 | 268 / 268 | 2669.3s / 2680s |
+
+Số đoạn đúng tuyệt đối; thời lượng lệch dưới 1%, vì độ dài mỗi đoạn là số đo
+trung bình của mấy đoạn mẫu chứ không phải số thật của từng đoạn. Hệ quả: phim
+phát liền mạch và đúng nội dung, nhưng thanh thời gian lệch được vài giây và tua
+tới thì lệch trong khoảng một đoạn. Muốn đúng từng đoạn thì phải lấy playlist
+thật từ streamc — `/hls.m3u8` vẫn thử đường đó trước, và nó chạy ở máy nhà hoặc
+bất cứ đâu Cloudflare không đứng chặn giữa.
+
+Playlist dựng từ CDN không mang token nào nên cache được lâu; bản do streamc cấp
+thì hết hạn sau 4 giờ.
 
 `turnstileEnabled` là công tắc Cloudflare Turnstile của chính trang đó. Lúc
 viết dòng này nó đang tắt; khi bật thì grant đòi một challenge đã giải, addon
