@@ -4,6 +4,7 @@ import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
 import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
 import { isStreamc, playlistOf, diagnose } from './lib/streamc.js';
+import { playlistFor as hh3dPlaylist } from './lib/hh3dPlayer.js';
 import { routesTo } from './sources/nguonc.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
@@ -326,6 +327,70 @@ export async function handleRequest(req, res) {
           : hit
             ? `có link nhưng không phát được (${media?.kind})`
             : 'trang embed không công bố link phát → chỉ mở link ngoài',
+      });
+    }
+
+    /**
+     * /hh3d.m3u8?u=<trang tập> — một tập HH3D, phát được trong Stremio.
+     *
+     * Link phát của HH3D nằm sau một gói mã hoá và một khoá dùng một lần; chỗ
+     * mở ra nằm ở lib/hh3dPlayer.js. Playlist trả về trỏ thẳng vào CDN của họ và
+     * không đòi header nào, nên nguồn này phát được cả khi máy xem không có
+     * server nội bộ của Stremio.
+     */
+    if (path === '/hh3d.m3u8') {
+      const u = url?.searchParams?.get('u') || '';
+      const host = (() => {
+        try {
+          return new URL(u).hostname.toLowerCase();
+        } catch {
+          return '';
+        }
+      })();
+      if (!host || !/(^|[.])hoathinh3d[.][a-z]+$/.test(host)) {
+        return send(res, 400, { err: 'chỉ nhận trang tập của hoathinh3d', page: u || null });
+      }
+      let playlist;
+      try {
+        playlist = await hh3dPlaylist(u);
+      } catch (err) {
+        return send(res, 502, { err: err.message, page: u });
+      }
+      if (!playlist) return send(res, 502, { err: 'không lấy được link phát của tập này', page: u });
+      res.writeHead(200, {
+        ...CORS,
+        'content-type': 'application/vnd.apple.mpegurl; charset=utf-8',
+        'cache-control': 'public, max-age=0, s-maxage=1800',
+      });
+      return res.end(playlist.body);
+    }
+
+    // /probe/hh3d?u=<trang tập> — luồng lấy link phát của HH3D, từng bước.
+    if (path === '/probe/hh3d') {
+      const u = url?.searchParams?.get('u') || '';
+      if (!u) return send(res, 400, { err: 'thiếu ?u=<trang tập>' });
+      const started = Date.now();
+      let playlist = null;
+      let error = null;
+      try {
+        playlist = await hh3dPlaylist(u);
+      } catch (err) {
+        error = err.message;
+      }
+      const first = String(playlist?.body || '')
+        .split(/\r?\n/)
+        .find((line) => /^https?:/.test(line));
+      const media = first ? await inspectMedia(first) : null;
+      return send(res, 200, {
+        page: u,
+        ms: Date.now() - started,
+        error,
+        segments: playlist?.segments ?? 0,
+        seconds: playlist?.seconds ?? null,
+        label: playlist?.label ?? null,
+        skip: playlist?.skip ?? null,
+        firstSegment: media && { status: media.status, contentType: media.contentType, bytes: media.head?.length },
+        verdict: playlist ? 'lấy được link phát' : error ? 'lỗi: ' + error : 'không lấy được link phát',
       });
     }
 
