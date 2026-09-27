@@ -139,6 +139,49 @@ function send(res, status, body, { edge = false } = {}) {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * Làm nóng playlist của dòng đầu tiên, ngay sau khi đã trả danh sách stream.
+ *
+ * Dòng đầu là dòng Stremio phát khi người xem bấm phát nhanh hoặc tự sang tập
+ * sau, và với HH3D thì lấy link phát tốn bốn lượt gọi liên tiếp vì lượt sau cần
+ * kết quả lượt trước. Đo trên Worker, cùng một phim, ba tập chưa ai chạm:
+ *
+ *   bấm phát ngay khi /stream vừa trả về   -> 1110ms  (việc làm nóng còn đang chạy)
+ *   bấm sau 2.5 giây                        ->   63ms
+ *   bấm sau 2.5 giây                        ->   78ms
+ *
+ * Tức là nó cần chừng hai giây chạy trước mới có ích — vừa đúng nhịp thật, vì
+ * người xem còn đọc danh sách vài giây trước khi bấm. Bấm ngay lập tức thì không
+ * mất gì, chỉ là không lợi.
+ *
+ * CHỈ làm nóng HH3D. Nguồn C dựng lại playlist từ CDN nên tốn khoảng 28 request
+ * (dò host, dò nhị phân số đoạn, đo độ dài), mà bản thân một lượt /stream đã
+ * tiêu chừng 20 trong hạn 50 subrequest của Worker miễn phí — làm nóng thêm là
+ * tự đẩy mình qua hạn và làm hỏng đúng cái request đang phục vụ.
+ *
+ * `defer` là waitUntil của Workers: không có nó thì promise bị hủy khi response
+ * đi ra. Trên Node thì không cần, cứ chạy tiếp trong tiến trình.
+ */
+function prewarm(streams, baseUrl, defer) {
+  if (!baseUrl) return;
+  const first = streams.find((s) => s.url?.startsWith(`${baseUrl}/`));
+  if (!first) return;
+
+  let target;
+  try {
+    const at = new URL(first.url);
+    if (at.pathname !== '/hh3d.m3u8') return;
+    target = at.searchParams.get('u');
+  } catch {
+    return;
+  }
+  if (!target) return;
+
+  // Lỗi ở đây không được làm gì cả: response đã đi rồi.
+  const job = hh3dPlaylist(target).catch(() => null);
+  if (defer) defer(job);
+}
+
 /** Public URL of this deployment, derived from the request so no config is needed. */
 function baseUrlOf(req) {
   if (CONFIG.baseUrl) return CONFIG.baseUrl;
@@ -171,7 +214,7 @@ function manifestFor(req) {
  * entrypoint, and it rejects an entrypoint whose default export is not a
  * function or a server. The (req, res) signature already matches what it wants.
  */
-export async function handleRequest(req, res) {
+export async function handleRequest(req, res, { defer } = {}) {
   if (req.method === 'OPTIONS') return send(res, 204, {});
 
   try {
@@ -209,7 +252,9 @@ export async function handleRequest(req, res) {
     const m = /^\/stream\/(movie|series)\/(.+?)(?:\.json)?$/.exec(path);
     if (m) {
       const [, type, id] = m;
-      const { streams } = await getStreams(type, id, { baseUrl: baseUrlOf(req) });
+      const baseUrl = baseUrlOf(req);
+      const { streams } = await getStreams(type, id, { baseUrl });
+      prewarm(streams, baseUrl, defer);
       return send(res, 200, { streams, cacheMaxAge: 600 }, { edge: true });
     }
 

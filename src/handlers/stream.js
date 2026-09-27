@@ -450,6 +450,33 @@ async function hh3dStream(target, parsed, dbg, baseUrl, vnTitles = []) {
   ];
 }
 
+/**
+ * Thứ tự dòng stream, xếp theo số đo chứ không theo cảm giác.
+ *
+ * Stremio phát dòng đầu tiên khi bấm phát nhanh và khi tự sang tập sau, nên thứ
+ * tự này là thứ quyết định người xem gặp nguồn nào trước. Đo ngày 22/09/2026 từ
+ * máy xem, tải thật 6 segment đầu của cùng một tập, hai lượt:
+ *
+ *   KKPhim    2.2–2.3x thời gian thực   (2.4 Mbps nội dung)
+ *   HH3D      6.6–7.2x                  (1.9 Mbps)
+ *   Nguồn C   10.5–12.6x                (2.0 Mbps)
+ *
+ * KKPhim xuống cuối vì 2.2x là mức duy nhất sát thời gian thực: mạng chớm yếu là
+ * hết đệm và đứng hình. Còn giữa HH3D và Nguồn C thì HH3D lên trước dù chậm hơn,
+ * vì trên 6x thì thêm băng thông không làm mượt hơn nữa, trong khi hai thứ khác
+ * thì có: HH3D không cần server nội bộ của Stremio, và độ dài từng đoạn là số
+ * thật của họ nên thanh thời gian với tua tới đều đúng — playlist Nguồn C dựng
+ * từ CDN chỉ có độ dài trung bình.
+ *
+ * Nguồn nào không có tên ở đây thì xuống dưới cùng, giữ nguyên thứ tự cũ.
+ */
+const SOURCE_ORDER = ['hh3d', 'nguonc', 'kkphim', 'ophim'];
+
+const rankOf = (stream) => {
+  const at = SOURCE_ORDER.findIndex((id) => stream.behaviorHints?.bingeGroup?.startsWith(`${id}-`));
+  return at === -1 ? SOURCE_ORDER.length : at;
+};
+
 export async function getStreams(type, rawId, { baseUrl = '' } = {}) {
   const parsed = parseId(type, rawId);
   if (!parsed) return { streams: [] };
@@ -486,7 +513,7 @@ export async function getStreams(type, rawId, { baseUrl = '' } = {}) {
   const fromHh3d =
     wantType === 'series' ? await guard('hh3d', (dbg) => hh3dStream(target, parsed, dbg, baseUrl, vnTitles)) : [];
 
-  const all = [...fromApi, ...fromHh3d];
+  const all = [...fromApi, ...fromHh3d].sort((a, b) => rankOf(a) - rankOf(b));
   const streams = CONFIG.linkRows ? all : all.filter((s) => !s.externalUrl);
   if (!CONFIG.linkRows) debug.hidden = all.length - streams.length;
   return { streams, debug };

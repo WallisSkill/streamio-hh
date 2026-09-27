@@ -20,7 +20,7 @@ import { toResponse } from '../src/lib/fetchAdapter.js';
 let appPromise;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     // CONFIG đọc process.env ngay lúc app.js được nạp lần đầu, mà trên Workers
     // các biến chỉ tồn tại trong `env` của mỗi request — nên phải đổ vào trước
     // khi import xảy ra. Import động ở dưới giữ đúng thứ tự đó.
@@ -36,7 +36,7 @@ export default {
         setOverrides(env.OVERRIDES);
       }
 
-      return await toResponse(handleRequest, request);
+      return await toResponse(handleRequest, request, ctx);
     } catch (err) {
       // Nạp module hỏng thì mọi request sau đều hỏng theo nếu giữ lại promise
       // lỗi — bỏ đi để lần sau thử lại, và trả lỗi đọc được thay vì trang 1101
