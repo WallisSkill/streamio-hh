@@ -227,6 +227,9 @@ async function streamsFrom(source, target, parsed, wantType, dbg, baseUrl) {
 
     dbg.picked = {
       slug: pick.candidate.slug,
+      // Tên tiếng Việt của mục vừa khớp. Trang HH3D không ghi tên gốc nên đây là
+      // thứ duy nhất tìm ra nó — xem hh3dStream.
+      name: entry.name,
       via: pick.via,
       score: pick.score,
       reasons: pick.reasons,
@@ -317,30 +320,87 @@ function streamsFromEntry(entry, source, target, parsed, wantType, dbg, baseUrl)
 }
 
 /**
- * HH3D as an external link.
+ * Tên tiếng Việt, gọt cho vừa cái ô tìm kiếm của HH3D.
  *
- * Only the episode permalink is produced — the stream URL sits behind HH3D's
- * keyed player endpoint, which this addon does not attempt to defeat.
- * Discovery reads the public listing pages when the site is reachable; a slug
- * pinned in overrides.json keeps working when it is not.
+ * Tìm kiếm của họ kén một cách cụ thể, đo ngày 22/09/2026 trên chính hai phim
+ * từng trượt:
+ *
+ *   "Đại Chúa Tể 3D"                        -> 3 kết quả, không cái nào đúng
+ *   "Đại Chúa Tể"                           -> 20 kết quả, có dai-chua-te
+ *   "Đấu La Đại Lục 2 (Tuyệt Thế Đường Môn)" -> 0 kết quả
+ *   "Đấu La Đại Lục 2"                      -> đúng phim ở hạng 1
+ *   "dai chua te 3d"                        -> 1 kết quả, sai phim
+ *
+ * Nên: cắt phần trong ngoặc và phần sau dấu hai chấm, bỏ đuôi "3D", và GIỮ dấu
+ * tiếng Việt — bỏ dấu là ra rác.
  */
-async function hh3dStream(target, parsed, dbg) {
+function hh3dTitle(name) {
+  return String(name || '')
+    .replace(/\s*[([].*$/, '')
+    .replace(/\s*:.*$/, '')
+    .replace(/\s+3\s*d\s*$/i, '')
+    .trim();
+}
+
+/**
+ * Một dòng HH3D.
+ *
+ * Link phát lấy lúc bấm phát, ở /hh3d.m3u8 — nó tốn hai lượt gọi và một lần giải
+ * mã AES-GCM, không đáng làm lúc dựng danh sách. Không biết địa chỉ công khai của
+ * chính addon thì không dựng được URL đó, và khi ấy trang tập là thứ duy nhất còn
+ * đưa ra được.
+ *
+ * Segment của HH3D không đòi header nào, nên dòng này phát được cả trên máy xem
+ * không có server nội bộ của Stremio — khác Nguồn C.
+ */
+function hh3dRow({ name, epNum, page, note, baseUrl, slug }) {
+  const url = baseUrl ? `${baseUrl}/hh3d.m3u8?u=${encodeURIComponent(page)}` : null;
+  const title = [name, `▶ Tập ${epNum}`, note, url ? '⟳ Lấy link lúc bấm phát' : '↗ Mở trên hoathinh3d']
+    .filter(Boolean)
+    .join('\n');
+
+  if (!url) return { name: `${BRAND} | HH3D\nMở trang`, title, externalUrl: page };
+  return {
+    name: `${BRAND} | HH3D\n1080p`,
+    title,
+    url,
+    behaviorHints: { notWebReady: false, bingeGroup: `hh3d-${slug}` },
+  };
+}
+
+/**
+ * HH3D, phát trực tiếp.
+ *
+ * Tên tiếng Việt vào cả hai chỗ, và cả hai đều cần thiết:
+ *
+ *   • vào truy vấn, vì trang HH3D không ghi tên gốc nên hỏi bằng tên tiếng Anh
+ *     của Cinemeta gần như luôn ra rỗng;
+ *   • vào danh sách tên để khớp, vì nếu không thì "Đại Chúa Tể" của HH3D đọ với
+ *     "The Great Ruler" của Cinemeta chỉ được 34 điểm — dưới ngưỡng 45 — và một
+ *     phim có thật bị loại đúng ở bước cuối.
+ *
+ * Slug ghim trong overrides.json vẫn là đường chắc nhất cho phim mà cả hai cách
+ * trên đều không tìm ra.
+ */
+async function hh3dStream(target, parsed, dbg, baseUrl, vnTitles = []) {
   if (!CONFIG.enableHh3d || parsed.season == null) return [];
 
   let entry = null;
   const pin = target.override?.hh3d;
+  const vnNames = [...new Set(vnTitles.flatMap((name) => [name, hh3dTitle(name)]))].filter(Boolean);
+  const local = vnNames.length ? { ...target, titles: [...new Set([...target.titles, ...vnNames])] } : target;
 
   if (pin) {
     entry = (await hh3d.detail(pin)) || { slug: pin, name: target.name, season: null, maxEpisode: 0, servers: [] };
   } else {
-    const candidates = [];
-    for (const q of buildQueries(target, parsed.season).slice(0, 2)) {
-      candidates.push(...(await hh3d.search(q)));
-    }
-    const scored = filterCandidates(candidates, target, 'series');
+    const queries = [...new Set([...vnNames, ...buildQueries(target, parsed.season).slice(0, 2)])].slice(0, 4);
+    dbg.queries = queries;
+
+    const candidates = (await Promise.all(queries.map((q) => hh3d.search(q)))).flat();
+    const scored = filterCandidates(candidates, local, 'series');
     const best = pickEntry(scored, parsed.season);
     if (!best) return [];
-    dbg.picked = { slug: best.candidate.slug, score: best.score, season: best.candidate.season };
+    dbg.picked = { slug: best.candidate.slug, score: best.score, reasons: best.reasons, season: best.candidate.season };
     entry = await hh3d.detail(best.candidate.slug);
   }
   if (!entry) return [];
@@ -359,13 +419,14 @@ async function hh3dStream(target, parsed, dbg) {
     dbg.decision = picked.decision;
     if (!picked.episode) return [];
     return [
-      {
-        name: `${BRAND} | HH3D\nMở trang`,
-        title: [entry.name, `▶ Tập ${picked.episode.num}`, picked.decision.note, 'Mở trên hoathinh3d']
-          .filter(Boolean)
-          .join('\n'),
-        externalUrl: picked.episode.page,
-      },
+      hh3dRow({
+        name: entry.name,
+        epNum: picked.episode.num,
+        page: picked.episode.page,
+        note: picked.decision.note,
+        baseUrl,
+        slug: entry.slug,
+      }),
     ];
   }
 
@@ -378,11 +439,14 @@ async function hh3dStream(target, parsed, dbg) {
   epNum += target.override?.offset || 0;
   dbg.decision = { mode: 'pinned', target: epNum, confidence: 'medium', note: 'Dựng link từ slug đã ghim' };
   return [
-    {
-      name: `${BRAND} | HH3D\nMở trang`,
-      title: [target.name, `▶ Tập ${epNum}`, 'Mở trên hoathinh3d'].join('\n'),
-      externalUrl: `${CONFIG.hh3dBase}/xem-phim-${entry.slug}/tap-${epNum}-sv1.html`,
-    },
+    hh3dRow({
+      name: target.name,
+      epNum,
+      page: `${CONFIG.hh3dBase}/xem-phim-${entry.slug}/tap-${epNum}-sv1.html`,
+      note: 'Dựng link từ slug đã ghim',
+      baseUrl,
+      slug: entry.slug,
+    }),
   ];
 }
 
@@ -412,13 +476,17 @@ export async function getStreams(type, rawId, { baseUrl = '' } = {}) {
     guard(source.id, (dbg) => streamsFrom(source, target, parsed, wantType, dbg, baseUrl)),
   );
 
-  // HH3D chỉ sinh ra link mở trang, nên khi những dòng đó bị tắt thì gọi nó là
-  // chờ vô ích — cắt luôn ở đây thay vì lọc bỏ kết quả sau khi đã đợi xong.
-  if (wantType === 'series' && CONFIG.linkRows) {
-    jobs.push(guard('hh3d', (dbg) => hh3dStream(target, parsed, dbg)));
-  }
+  const fromApi = (await Promise.all(jobs)).flat();
 
-  const all = (await Promise.all(jobs)).flat();
+  // HH3D đi sau chứ không song song: nó cần tên tiếng Việt để tìm được phim, mà
+  // tên tiếng Việt lại là thứ các nguồn API vừa tìm ra. Trả giá bằng một chặng
+  // chờ nữa, nhưng chặng đó quyết định có tìm thấy phim hay không, chứ không phải
+  // chỉ để nhanh hơn.
+  const vnTitles = [...new Set(Object.values(debug.sources).map((s) => s.picked?.name).filter(Boolean))];
+  const fromHh3d =
+    wantType === 'series' ? await guard('hh3d', (dbg) => hh3dStream(target, parsed, dbg, baseUrl, vnTitles)) : [];
+
+  const all = [...fromApi, ...fromHh3d];
   const streams = CONFIG.linkRows ? all : all.filter((s) => !s.externalUrl);
   if (!CONFIG.linkRows) debug.hidden = all.length - streams.length;
   return { streams, debug };

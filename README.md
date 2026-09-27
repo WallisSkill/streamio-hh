@@ -1,4 +1,4 @@
-# VN Phim — Stremio addon (KKPhim + HH3D)
+# VN Phim — Stremio addon (KKPhim + Nguồn C + HH3D)
 
 Addon **stream-only**: bạn vẫn duyệt phim bằng danh mục chính thức của Stremio
 (Cinemeta), addon chỉ cung cấp nguồn phát. Nhờ vậy tên phim, poster, danh sách
@@ -42,9 +42,10 @@ Xong thì mở `https://<tên-app>.vercel.app` và bấm **Cài vào Stremio**.
 `s-maxage=600`, nên CDN của Vercel trả thẳng cho lần bấm thứ hai mà không
 gọi lại hàm. Lần đầu một tập mất khoảng 3–4 giây, sau đó gần như tức thì.
 
-**Tự dò slug HH3D không chạy trên Vercel** vì runtime không có `curl`. Addon
-tự bỏ qua HH3D, các nguồn khác không ảnh hưởng. Muốn giữ link HH3D thì ghim
-slug trong `overrides.json` — cách đó vẫn chạy bình thường trên serverless.
+**HH3D chạy được ở mọi nơi.** Phần dò phim từng cần `curl` (site trả 403 cho
+fetch của Node) nên tắt trên serverless; `hoathinh3d.de` giờ trả 200 cho fetch
+thường, kể cả từ Worker. Slug ghim trong `overrides.json` vẫn là đường chắc nhất
+cho phim mà tìm kiếm của họ không ra.
 
 **Nguồn C bị chặn theo IP, và có cách đi vòng.** Cloudflare của nguonc trả
 403 cho IP datacenter ở mọi path, nên addon tự tắt nguồn này khi phát hiện
@@ -119,7 +120,7 @@ chặng hỏng, vì đường gọi thẳng đã đi được. Khác biệt so v
 
 - Nguồn C chỉ chạy cho người xem có IP dân cư; xem qua VPN đặt ở datacenter thì
   nguồn này lại tắt
-- HH3D mất phần tự dò slug (không có `curl`), giống hệt trên Vercel
+- HH3D chạy đủ cả dò phim lẫn link phát (không cần `curl` nữa)
 - `overrides.json` không đọc được vì không có hệ thống tệp — nạp qua biến
   `OVERRIDES` chứa chuỗi JSON, xem [`wrangler.toml`](wrangler.toml)
 
@@ -242,7 +243,7 @@ Trả về nguồn đã chọn, điểm khớp, lý do khớp và chế độ đ
 | **KKPhim** (phimapi.com) | Có, m3u8 trực tiếp | Nhiều server: Vietsub / Thuyết Minh / Lồng Tiếng. Tập chỉ có `link_embed` cũng phát được — xem phần link embed bên dưới |
 | **Ophim** (ophim1.com) | **Đang hỏng, tắt mặc định trên Workers** | API trả 404 ở mọi path (đo 28/08/2026), không mirror nào còn sống. Bật lại bằng `ENABLE_OPHIM=1` khi nó hồi phục |
 | **Nguồn C** (phim.nguonc.com) | Có, qua `/hls.m3u8` + `STREMIO_PROXY` | [API mở](https://phim.nguonc.com/api-document), không cần key. Trang embed không công bố link phát và segment đòi Referer — xem giải thích bên dưới |
-| **HH3D** (hoathinh3d) | Không — chỉ link mở trang | Xem giải thích bên dưới |
+| **HH3D** (hoathinh3d) | Có, 1080p — không cần `STREMIO_PROXY` | Link phát nằm sau một gói mã hoá AES-GCM và một khoá dùng một lần; segment bọc PNG 70 byte. Xem giải thích bên dưới |
 
 Cả KKPhim và Ophim đều là API JSON công khai, trả `link_m3u8` cho request ẩn
 danh, không cần token. Mỗi server của mỗi nguồn là một lựa chọn riêng trong
@@ -382,21 +383,68 @@ ai gắn Referer hộ segment nữa.
 Kiểm tra một tập bất kỳ bằng `/probe/embed` — với embed streamc nó báo grant có
 về không, playlist có bao nhiêu segment, và segment đầu tiên tải được hay không.
 
-### Vì sao HH3D không phát trực tiếp được
+### HH3D phát trực tiếp bằng cách nào
 
-HH3D **không** đặt link phát trong HTML. Trang tập chỉ chứa `player_key_url`
-trỏ tới `/wp-json/halim/v1/player-key`, và endpoint đó đòi tham số `key_id`
-do bundle JS của player tự sinh lúc chạy. Cộng thêm hệ thống đăng nhập, nhãn
-VIP và việc chặn client không phải trình duyệt — cả chồng biện pháp đó nhằm
-đảm bảo chỉ player của họ mới lấy được link.
+Trang tập HH3D **không** đặt link phát trong HTML — chỉ có `player_key_url` trỏ
+tới `/wp-json/halim/v1/player-key`. Trước đây README này kết luận từ đó là không
+lấy được. Đọc bundle player thì ra cả ba lớp đều mở được bằng HTTP thường:
 
-Addon này **không phá cơ chế đó**. HH3D chỉ xuất hiện dưới dạng link mở đúng
-trang tập.
+```
+player.php?episode_slug=&server_id=&post_id=   -> { _encrypted, kid, iv, payload }
+POST /wp-json/halim/v1/player-key { key_id }   -> { key }
+AES-GCM(payload, key, iv)                      -> { file: <m3u8>, label, skip_time }
+```
 
-Phần tự dò slug HH3D đọc trang công khai qua `curl`, nhưng site giới hạn tần
-suất theo IP nên hay trả 403; khi đó addon bỏ qua HH3D, các nguồn khác không bị
-ảnh hưởng. Ghim `hh3d` slug trong `overrides.json` thì link tập vẫn dựng
-được kể cả lúc site chặn, vì URL tập suy ra được tất định.
+Ba chi tiết quyết định, đo ngày 22/09/2026:
+
+- `player.php` đòi đúng ba header: `Referer` là trang tập (thiếu thì 404),
+  `X-Requested-With: XMLHttpRequest`, và `X-Halim-Client` — một chuỗi ngẫu nhiên
+  player tự sinh rồi giữ trong `sessionStorage`; giá trị nào cũng được.
+- Khoá **dùng một lần và gắn với phiên**: gọi `player-key` mà không mang cookie
+  của chính request lấy gói mã hoá thì nhận `player_key_expired` ("phiên khác").
+  Nên cả luồng phải đi chung một giỏ cookie, thứ `fetch()` không tự giữ.
+- Playlist trả về là HLS VOD thật và **không đòi header nào**, kể cả Referer.
+
+Còn một lớp ở segment: mỗi segment bị bọc một ảnh PNG 1x1 dài **đúng 70 byte** ở
+đầu (IEND ở byte 62, gói TS 188 byte lặp đúng từ byte 70 — kiểm trên nhiều
+segment rải khắp phim). Player của họ cắt phần đó trong JS rồi dựng `blob:`, nên
+nhìn từ ngoài tưởng là stream không lấy được.
+
+Ở đây không cắt byte nào: playlist trả cho Stremio ghi thêm
+`#EXT-X-BYTERANGE:<trần>@70` cho mỗi segment, và **chính người chơi** bỏ qua 70
+byte đầu bằng một request Range. Dùng trần lớn thay cho độ dài thật, vì độ dài
+thật đòi một HEAD cho mỗi segment — 700 request cho một tập; CDN tự kẹp về hết
+file khi Range vượt quá.
+
+Nhờ vậy HH3D **không cần `STREMIO_PROXY`** như Nguồn C: segment đi thẳng từ máy
+người xem tới CDN, không header, không proxy. Và độ dài từng đoạn là số thật của
+họ, nên thanh thời gian và tua tới đều đúng.
+
+Phần dò phim cũng không cần `curl` nữa — `hoathinh3d.de` trả `200` cho `fetch`
+thường, kể cả từ Cloudflare Workers, và sáu trang gọi song song đều `200` trong
+650ms nên không còn giãn cách 1.5 giây. Nhưng tìm kiếm của họ kén một cách cụ
+thể:
+
+| Truy vấn | Kết quả |
+|---|---|
+| `Đại Chúa Tể 3D` | 3 kết quả, không cái nào đúng |
+| `Đại Chúa Tể` | 20 kết quả, có `dai-chua-te` |
+| `Đấu La Đại Lục 2 (Tuyệt Thế Đường Môn)` | 0 kết quả |
+| `Đấu La Đại Lục 2` | đúng phim ở hạng 1 |
+| `dai chua te 3d` | 1 kết quả, sai phim |
+
+Nên tên đưa vào phải là **tiếng Việt, còn dấu**, đã cắt phần trong ngoặc và phần
+sau dấu hai chấm. Trang HH3D không ghi tên gốc, nên tên tiếng Việt lấy từ mục đã
+khớp ở KKPhim/Nguồn C — vì thế HH3D chạy SAU hai nguồn kia chứ không song song.
+Tên đó cũng được đưa vào danh sách tên để khớp, không chỉ vào truy vấn: nếu
+không thì `Đại Chúa Tể` của HH3D đọ với `The Great Ruler` của Cinemeta chỉ được
+34 điểm, dưới ngưỡng 45, và một phim có thật bị loại đúng ở bước cuối.
+
+Kiểm một tập bất kỳ bằng `/probe/hh3d?u=<trang tập>`. Hai kiểu trượt đã đo đều tự
+khỏi ở lần thử thứ hai nên addon thử lại một lần: tập trả về `sources` rỗng
+(~1/3 lần), và request treo tới hết hạn chờ vì tiến trình sống lâu tái dùng một
+socket keep-alive đã chết. Phim nào rỗng nguồn ở mọi tập thì là bên họ thiếu, ghi
+`hh3d` slug trong `overrides.json` cũng không cứu được.
 
 ## Cấu hình
 

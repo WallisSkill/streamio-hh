@@ -46,7 +46,7 @@ export const CONFIG = {
   nguoncUpstream,
   nguoncProxy,
   nguoncProxyIgnored,
-  hh3dBase: (env.HH3D_BASE || 'https://hoathinh3d.so').replace(/\/+$/, ''),
+  hh3dBase: (env.HH3D_BASE || 'https://hoathinh3d.de').replace(/\/+$/, ''),
   enableOphim: bool(env.ENABLE_OPHIM, true),
   enableNguonc: bool(env.ENABLE_NGUONC, !onServerless || Boolean(nguoncUpstream || nguoncProxy)),
   enableKkphim: bool(env.ENABLE_KKPHIM, true),

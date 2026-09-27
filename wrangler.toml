@@ -15,9 +15,9 @@ compatibility_flags = ["nodejs_compat"]
 # ophim1.com trả 404 ở mọi path API, và không mirror nào còn sống (ophim.cc trả
 # trang chống bot, ophim9/13/16 timeout hoặc không phân giải được tên miền).
 ENABLE_OPHIM = "0"
-# Workers không có tiến trình con nên không chạy được curl, phần tự dò slug của
-# HH3D tắt vĩnh viễn ở đây; chỉ còn slug ghim tay trong overrides.json.
-ENABLE_HH3D = "0"
+# HH3D bật lại: phần dò phim không cần curl nữa (hoathinh3d.de trả 200 cho fetch
+# thường, kể cả từ Worker), và link phát thì mở được — xem lib/hh3dPlayer.js.
+ENABLE_HH3D = "1"
 
 # Nguồn C không cần NGUONC_PROXY hay NGUONC_UPSTREAM ở đây: request đi ra mang
 # IP của người xem, và nguonc nhận IP dân cư. Đặt vào chỉ tổ thêm một chặng hỏng.

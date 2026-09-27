@@ -1,17 +1,26 @@
 import { CONFIG } from '../config.js';
 import { safe } from '../lib/http.js';
-import { curlGet, curlAvailable } from '../lib/curlFetch.js';
 import { cached } from '../lib/cache.js';
 import { detectSeason, decodeEntities } from '../lib/text.js';
 
 /**
- * HH3D integration is deliberately limited to the site's public pages:
- * search results, the show page, and the episode permalink.
+ * HH3D (hoathinh3d) — trang tìm kiếm, trang phim, và link từng tập.
  *
- * The stream URL itself is NOT read. HH3D keeps it out of the HTML and behind a
- * keyed endpoint (/wp-json/halim/v1/player-key requires a key_id), i.e. an access
- * control the operator put there on purpose. This addon does not defeat it —
- * HH3D results are returned as external links that open the episode page.
+ * Module này chỉ đọc mấy trang công khai để biết phim nào có tập nào. Việc biến
+ * một trang tập thành link phát nằm ở `lib/hh3dPlayer.js`.
+ *
+ * Hai thứ đã đổi so với bản trước, và đổi vì đo lại chứ không vì đoán:
+ *
+ *   • Không cần curl nữa. Trước đây site trả 403 cho fetch của Node và 200 cho
+ *     curl, nên phần này chạy qua tiến trình con — và vì Workers không có tiến
+ *     trình con, HH3D tắt vĩnh viễn ở đó. Trên hoathinh3d.de thì fetch thường
+ *     được 200, kể cả từ Worker.
+ *   • Không cần giãn cách 1.5 giây giữa các request nữa: sáu trang phim gọi
+ *     song song đều trả 200 trong 650ms (đo 22/09/2026). Cache vẫn giữ.
+ *
+ * Trang phim chỉ ghi tên tiếng Việt, không có tên gốc — nên tìm HH3D bằng tên
+ * tiếng Anh của Cinemeta gần như luôn ra rỗng. Người gọi phải đưa tên tiếng Việt
+ * vào, và tên đó lấy từ mục đã khớp ở KKPhim/Nguồn C (xem handlers/stream.js).
  */
 
 const RX_ARTICLE = /<article[^>]*class="[^"]*grid-item[^"]*"[\s\S]*?(?=<article|<\/main|$)/g;
@@ -21,34 +30,26 @@ const RX_ORIG = /<p[^>]*class="[^"]*original_title[^"]*"[^>]*>([^<]*)/;
 const RX_EPISODE_LINK = /href="(https?:[/][/][^"]*[/]xem-phim-[^"]+[/]tap-([0-9]+)-sv([0-9]+)[.]html)"/g;
 const RX_SHOW_URL = /^https?:[/][/][^/]+[/][a-z0-9-]+[/]?$/i;
 
-/**
- * HH3D throttles bursts with 403s, so page reads are serialised with a gap
- * and cached. Only public listing pages are read here.
- */
-const MIN_GAP_MS = 1500;
-let chain = Promise.resolve();
-let lastAt = 0;
-
-function fetchPage(url) {
-  const run = async () => {
-    if (!(await curlAvailable())) throw new Error('curl không có sẵn');
-    const wait = Math.max(0, MIN_GAP_MS - (Date.now() - lastAt));
-    if (wait) await new Promise((r) => setTimeout(r, wait));
-    try {
-      return await curlGet(url);
-    } finally {
-      lastAt = Date.now();
-    }
-  };
-  chain = chain.then(run, run);
-  return chain;
+/** Một trang công khai của HH3D, kèm URL cuối sau chuyển hướng. */
+async function fetchPage(url) {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(CONFIG.httpTimeout),
+    headers: {
+      'user-agent': CONFIG.userAgent,
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'vi-VN,vi;q=0.9,en;q=0.8',
+    },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return { body: await res.text(), finalUrl: res.url };
 }
 
 /** Search hh3d. Note: a single strong match makes WordPress redirect to the show page. */
 export async function search(keyword) {
   if (!keyword || !CONFIG.enableHh3d) return [];
   const url = `${CONFIG.hh3dBase}/?s=${encodeURIComponent(keyword)}`;
-  const res = await safe(fetchPage(url), 'hh3d-search');
+  const res = await safe(cached(`hh3d:search:${keyword}`, () => fetchPage(url)), 'hh3d-search');
   if (!res) return [];
   const { body, finalUrl } = res;
 
@@ -68,8 +69,8 @@ export async function search(keyword) {
   // search collapsed straight to a show page
   if (!out.length && finalUrl && !/[?&]s=|\/search\//.test(finalUrl) && RX_SHOW_URL.test(finalUrl)) {
     const name = decodeEntities(/<title>([^<]*)<\/title>/.exec(body)?.[1] || '')
-      .replace(/\s*[|\u2013-]\s*HH3D.*$/i, '')
-      .replace(/\s*T\u1eadp\s*\d+.*$/i, '')
+      .replace(/\s*[|–-]\s*HH3D.*$/i, '')
+      .replace(/\s*Tập\s*\d+.*$/i, '')
       .trim();
     if (name) out.push(toCandidate({ link: finalUrl, name, originName: '', year: null }));
   }

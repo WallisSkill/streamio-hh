@@ -156,12 +156,23 @@ export async function playlistFor(pageUrl) {
  *
  * Khoá player dùng một lần và gắn với phiên, nên khi trượt thì phải đi lại từ
  * đầu bằng phiên mới chứ không gọi lại riêng bước lấy khoá.
+ *
+ * Lỗi cũng tính là trượt, không để nó vọt ra ngoài. Hai kiểu trượt đã đo đều tự
+ * khỏi ở lần hai: tập trả về sources rỗng (~1/3 lần), và request treo tới hết
+ * hạn chờ vì tiến trình sống lâu tái dùng một socket keep-alive đã chết —
+ * lần sau đi socket mới.
  */
 async function build(pageUrl) {
+  let last = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const out = await once(pageUrl);
-    if (out) return out;
+    try {
+      const out = await once(pageUrl);
+      if (out) return out;
+    } catch (err) {
+      last = err;
+    }
   }
+  if (last) console.warn(`[hh3d-player] ${last.message}`);
   return null;
 }
 
