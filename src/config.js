@@ -60,6 +60,13 @@ export const CONFIG = {
     .filter(Boolean),
   embedTtl: Number(env.EMBED_TTL || 300) * 1000,
   onWorkers,
+  // CDN chứa segment của HH3D. Chỉ mấy host này được /hh3d-seg tải hộ, để nó
+  // không thành proxy mở. Đo 22/09/2026: cả 8 phim thử đều nằm trên một host.
+  hh3dSegmentHosts: env.HH3D_SEGMENT_HOSTS || 'm.ckjdsib32rkjvsd.xyz',
+  // Trỏ segment thẳng vào CDN kèm #EXT-X-BYTERANGE thay vì đi qua addon: nhanh
+  // hơn và không tốn băng thông, nhưng độ dài khai trong playlist không đúng
+  // chuẩn nên player chặt chẽ (điện thoại) thử lại liên tục và xem bị lag.
+  hh3dDirectSegments: bool(env.HH3D_DIRECT_SEGMENTS, false),
   // Dòng "mở trang" cho những tập không phát được trong Stremio. Mặc định TẮT:
   // bấm vào nó là bị đá ra trình duyệt, mà người xem mở Stremio lên là để xem
   // trong Stremio — một dòng không phát được thà đừng có còn hơn.

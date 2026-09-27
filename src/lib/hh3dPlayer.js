@@ -19,26 +19,102 @@ import { cacheGet, cacheSet } from './cache.js';
  *   3. Giải AES-GCM (khoá 32 byte, iv 12 byte, cả hai base64url) ra JSON, trong
  *      đó `file` là một playlist HLS VOD thật — và nó không đòi header gì cả.
  *
- * Còn một lớp nữa nằm ở segment: mỗi segment bị bọc một ảnh PNG 1x1 dài đúng 70
- * byte ở đầu, MPEG-TS bắt đầu từ byte 70 (đo trên nhiều segment rải khắp phim:
- * IEND ở 62, gói TS 188 byte lặp đúng từ 70). Player của họ cắt phần đó trong JS
- * rồi dựng blob. Ở đây không cần đụng tới byte nào: playlist trả cho Stremio
- * ghi thêm `#EXT-X-BYTERANGE:<dài>@70` cho mỗi segment, và chính người chơi bỏ
- * qua 70 byte đầu bằng một request Range.
+ * Còn một lớp nữa nằm ở segment, và chỗ này tôi từng đoán sai: một SỐ phim có
+ * segment bị bọc một ảnh PNG 1x1 ở đầu (IEND ở byte 62, MPEG-TS bắt đầu từ byte
+ * 70), nhưng phần lớn thì không bọc gì cả — TS bắt đầu ngay byte 0. Đo 27/09/2026
+ * trên bốn phim: chỉ Thế Giới Hoàn Mỹ bị bọc, ba phim còn lại không.
  *
- * Độ dài lấy trần rất lớn thay vì số thật, vì số thật đòi một HEAD cho mỗi
- * segment — 700 request cho một tập. CDN tự kẹp về hết file khi Range vượt quá,
- * và ffmpeg (đúng bản Stremio dùng) đọc được.
+ * Nên độ lệch phải ĐO cho từng phim, đừng cắt cứng (xem tsOffset). Cắt 70 byte
+ * của một phim không bọc là cắt mất 70 byte giữa gói TS đầu tiên: ffmpeg tự dò
+ * lại nên trên PC không thấy gì, còn player chặt chẽ hơn phải dò lại ở từng
+ * segment và xem bị lag — đúng triệu chứng "PC thì mượt, điện thoại thì lag".
  *
- * Nhờ vậy nguồn này không cần server nội bộ của Stremio: segment đi thẳng từ
- * máy người xem tới CDN, không header, không proxy.
+ * Từ đó playlist dựng theo hai cách:
+ *
+ *   • Phim không bọc (phần lớn): trỏ thẳng CDN, không range, không proxy. HLS
+ *     thường, đúng chuẩn, player nào cũng đọc được, và không tốn băng thông của
+ *     addon — segment đi thẳng từ máy người xem tới CDN.
+ *   • Phim có bọc: trỏ qua /hh3d-seg của chính addon, chỗ đó bỏ đúng số byte đã
+ *     đo rồi giao phần còn lại. Vẫn là HLS thường, không dùng `#EXT-X-BYTERANGE`
+ *     nữa vì độ dài thật chỉ biết được bằng một HEAD cho mỗi segment (649 request
+ *     một tập), mà khai độ dài không đúng là thứ RFC 8216 cấm và cũng là thứ làm
+ *     player chặt chẽ thử lại liên tục.
+ *
+ * Cả hai cách đều không cần server nội bộ của Stremio, khác Nguồn C.
  */
 
-/** Trần cho #EXT-X-BYTERANGE: lớn hơn mọi segment thực tế (đo: tối đa ~2 MB). */
+/**
+ * Trần cho `#EXT-X-BYTERANGE` ở chế độ cũ (HH3D_DIRECT_SEGMENTS=1).
+ *
+ * Lớn hơn mọi segment thực tế, và đó chính là chỗ sai: RFC 8216 đòi độ dài phải
+ * đúng, còn độ dài thật thì phải HEAD từng segment mới biết — 649 request một
+ * tập. ffmpeg bỏ qua chuyện đó nên Stremio trên PC vẫn mượt, player chặt chẽ hơn
+ * thì thử lại liên tục và sinh ra lag. Chế độ này giữ lại để so sánh và cho ai
+ * muốn không đẩy byte qua addon.
+ */
 const RANGE_CAP = 20_000_000;
 
-/** Số byte PNG chèn trước dữ liệu TS. */
-const PNG_PREFIX = 70;
+/** CDN chứa segment HH3D. Ghi đè bằng HH3D_SEGMENT_HOSTS khi họ đổi. */
+function segmentHosts() {
+  return String(CONFIG.hh3dSegmentHosts || '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Chỉ proxy segment của đúng mấy host này.
+ *
+ * Không có dòng chặn đó thì /hh3d-seg là một proxy mở: ai biết địa chỉ cũng sai
+ * khiến nó tải hộ bất cứ thứ gì.
+ */
+export function segmentAllowed(candidate) {
+  try {
+    const at = new URL(candidate);
+    if (at.protocol !== 'https:' && at.protocol !== 'http:') return false;
+    const host = at.hostname.toLowerCase();
+    return segmentHosts().some((h) => host === h || host.endsWith(`.${h}`));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Dữ liệu TS bắt đầu ở byte thứ mấy của một segment.
+ *
+ * Đây là chỗ tôi từng đoán sai và phải đo mới ra: KHÔNG phải phim nào cũng bị
+ * bọc. Đo 27/09/2026 trên bốn phim, mỗi phim ba segment rải khắp:
+ *
+ *   Thế Giới Hoàn Mỹ tập 288   -> PNG 1x1 ở đầu, TS bắt đầu ở byte 70
+ *   Đại Chúa Tể tập 1          -> không bọc, TS ở byte 0
+ *   Tiên Nghịch tập 1          -> không bọc
+ *   Thôn Phệ Tinh Không tập 141 -> không bọc
+ *
+ * Trong một phim thì các segment giống nhau, nên đo một segment là đủ cho cả
+ * playlist. Cắt cứng 70 byte cho mọi phim là cắt mất 70 byte GIỮA gói TS đầu
+ * tiên của ba phần tư số phim: ffmpeg tự dò lại nên trên PC không thấy gì, còn
+ * player chặt chẽ hơn thì phải dò lại ở từng segment và xem bị lag.
+ *
+ * Tìm bằng cách soi lưới: gói TS dài 188 byte và mở đầu bằng 0x47, nên vị trí
+ * đúng là chỗ có 0x47 lặp lại đúng ba lần cách nhau 188 byte. Không thấy thì trả
+ * 0 — giao nguyên văn còn hơn tự cắt theo phỏng đoán.
+ */
+async function tsOffset(segmentUrl) {
+  try {
+    const res = await fetch(segmentUrl, {
+      headers: { 'user-agent': CONFIG.userAgent, referer: `${CONFIG.hh3dBase}/`, range: 'bytes=0-2047' },
+      signal: AbortSignal.timeout(CONFIG.httpTimeout),
+    });
+    if (!res.ok && res.status !== 206) return 0;
+    const b = new Uint8Array(await res.arrayBuffer());
+    for (let i = 0; i + 188 * 3 < b.length; i += 1) {
+      if (b[i] === 0x47 && b[i + 188] === 0x47 && b[i + 376] === 0x47) return i;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
 
 const b64url = (value) => {
   const norm = String(value).replace(/-/g, '+').replace(/_/g, '/');
@@ -136,19 +212,27 @@ async function playerConfig(pageUrl) {
 /**
  * Trang tập HH3D -> playlist phát được, hoặc null.
  *
- * Cache theo trang tập: link CDN trong playlist không mang token nên sống lâu,
- * còn URL playlist gốc thì có token hết hạn sau khoảng một giờ — nên cái được
- * giữ lại là playlist đã viết lại, không phải URL gốc.
+ * `segmentBase` là địa chỉ /hh3d-seg của chính addon. Có nó thì playlist trỏ
+ * segment qua đó — HLS thường, không range, đúng chuẩn, và người chơi nào cũng
+ * đọc được. Không có (hoặc HH3D_DIRECT_SEGMENTS=1) thì quay về cách cũ: trỏ
+ * thẳng CDN kèm `#EXT-X-BYTERANGE` để người chơi tự bỏ 70 byte đầu — nhanh hơn
+ * và không tốn băng thông của addon, nhưng khai độ dài không đúng chuẩn nên chỉ
+ * player dễ tính mới mượt.
+ *
+ * Cache theo cả hai: cùng một tập nhưng hai cách dựng là hai playlist khác nhau.
  */
-export async function playlistFor(pageUrl) {
-  const hit = cacheGet(`hh3d:playlist:${pageUrl}`);
+export async function playlistFor(pageUrl, { segmentBase = null } = {}) {
+  const proxied = segmentBase && !CONFIG.hh3dDirectSegments ? segmentBase : null;
+  const key = `hh3d:playlist:${proxied ? 'seg' : 'range'}:${pageUrl}`;
+
+  const hit = cacheGet(key);
   if (hit) return hit;
 
-  const built = await build(pageUrl);
+  const built = await build(pageUrl, proxied);
   // Chỉ cache khi có kết quả. Luồng này chập chờn — đo 22/09/2026: cùng một tập
   // 2 lần được 1 lần trượt — nên cache cả lần trượt là biến một cái vấp mạng
   // thành nửa tiếng phim không phát được, đúng cái bẫy getAliases từng mắc.
-  return built ? cacheSet(`hh3d:playlist:${pageUrl}`, built, CONFIG.cacheTtl) : null;
+  return built ? cacheSet(key, built, CONFIG.cacheTtl) : null;
 }
 
 /**
@@ -162,11 +246,11 @@ export async function playlistFor(pageUrl) {
  * hạn chờ vì tiến trình sống lâu tái dùng một socket keep-alive đã chết —
  * lần sau đi socket mới.
  */
-async function build(pageUrl) {
+async function build(pageUrl, segmentBase) {
   let last = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const out = await once(pageUrl);
+      const out = await once(pageUrl, segmentBase);
       if (out) return out;
     } catch (err) {
       last = err;
@@ -176,7 +260,7 @@ async function build(pageUrl) {
   return null;
 }
 
-async function once(pageUrl) {
+async function once(pageUrl, segmentBase) {
   const config = await playerConfig(pageUrl);
   if (!config) return null;
 
@@ -188,9 +272,19 @@ async function once(pageUrl) {
   const text = await res.text();
   if (!/^#EXTM3U/.test(text.trim())) return null;
 
-  // Playlist nhiều chất lượng thì từng dòng con lại là một playlist nữa,
-  // và ghi BYTERANGE lên đó là sai — báo không xử lý được thay vì trả bừa.
+  // Playlist nhiều chất lượng thì từng dòng con lại là một playlist nữa, và viết
+  // lại dòng segment lên đó là sai — báo không xử lý được thay vì trả bừa.
   if (/#EXT-X-STREAM-INF/.test(text)) return null;
+
+  const urls = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'))
+    .map((l) => new URL(l, config.file).href);
+  if (!urls.length) return null;
+
+  // Đo một segment là đủ: trong cùng một phim chúng giống nhau.
+  const offset = await tsOffset(urls[0]);
 
   let segments = 0;
   const lines = [];
@@ -201,9 +295,18 @@ async function once(pageUrl) {
       lines.push(line);
       continue;
     }
+    const at = urls[segments];
     segments += 1;
-    lines.push(`#EXT-X-BYTERANGE:${RANGE_CAP}@${PNG_PREFIX}`);
-    lines.push(new URL(line, config.file).href);
+    if (!offset) {
+      // Không bọc gì: trỏ thẳng CDN. Đúng chuẩn, nhanh nhất, và không byte nào
+      // của phim đi qua addon.
+      lines.push(at);
+    } else if (segmentBase) {
+      lines.push(`${segmentBase}?u=${encodeURIComponent(at)}&skip=${offset}`);
+    } else {
+      lines.push(`#EXT-X-BYTERANGE:${RANGE_CAP}@${offset}`);
+      lines.push(at);
+    }
   }
   if (!segments) return null;
   if (!lines.includes('#EXT-X-ENDLIST')) lines.push('#EXT-X-ENDLIST');
@@ -211,6 +314,8 @@ async function once(pageUrl) {
   const seconds = [...text.matchAll(/#EXTINF:([\d.]+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
   return {
     body: lines.join('\n'),
+    via: !offset ? 'direct' : segmentBase ? 'proxy' : 'byterange',
+    offset,
     segments,
     seconds: Number(seconds.toFixed(1)),
     label: config.label,

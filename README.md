@@ -243,7 +243,7 @@ Trả về nguồn đã chọn, điểm khớp, lý do khớp và chế độ đ
 | **KKPhim** (phimapi.com) | Có, m3u8 trực tiếp | Nhiều server: Vietsub / Thuyết Minh / Lồng Tiếng. Tập chỉ có `link_embed` cũng phát được — xem phần link embed bên dưới |
 | **Ophim** (ophim1.com) | **Đang hỏng, tắt mặc định trên Workers** | API trả 404 ở mọi path (đo 28/08/2026), không mirror nào còn sống. Bật lại bằng `ENABLE_OPHIM=1` khi nó hồi phục |
 | **Nguồn C** (phim.nguonc.com) | Có, qua `/hls.m3u8` + `STREMIO_PROXY` | [API mở](https://phim.nguonc.com/api-document), không cần key. Trang embed không công bố link phát và segment đòi Referer — xem giải thích bên dưới |
-| **HH3D** (hoathinh3d) | Có, 1080p — không cần `STREMIO_PROXY` | Link phát nằm sau một gói mã hoá AES-GCM và một khoá dùng một lần; segment bọc PNG 70 byte. Xem giải thích bên dưới |
+| **HH3D** (hoathinh3d) | Có, 1080p — không cần `STREMIO_PROXY` | Link phát nằm sau một gói mã hoá AES-GCM và một khoá dùng một lần; một số phim còn bọc PNG ở đầu segment. Xem giải thích bên dưới |
 
 Cả KKPhim và Ophim đều là API JSON công khai, trả `link_m3u8` cho request ẩn
 danh, không cần token. Mỗi server của mỗi nguồn là một lựa chọn riêng trong
@@ -405,20 +405,43 @@ Ba chi tiết quyết định, đo ngày 22/09/2026:
   Nên cả luồng phải đi chung một giỏ cookie, thứ `fetch()` không tự giữ.
 - Playlist trả về là HLS VOD thật và **không đòi header nào**, kể cả Referer.
 
-Còn một lớp ở segment: mỗi segment bị bọc một ảnh PNG 1x1 dài **đúng 70 byte** ở
-đầu (IEND ở byte 62, gói TS 188 byte lặp đúng từ byte 70 — kiểm trên nhiều
-segment rải khắp phim). Player của họ cắt phần đó trong JS rồi dựng `blob:`, nên
-nhìn từ ngoài tưởng là stream không lấy được.
+Còn một lớp ở segment, và chỗ này ban đầu tôi kết luận sai. Có phim bị bọc một
+ảnh PNG 1x1 ở đầu (IEND ở byte 62, gói TS 188 byte lặp đúng từ byte 70), nhưng
+**phần lớn phim không bọc gì cả** — TS bắt đầu ngay byte 0. Đo 27/09/2026 trên
+bốn phim, mỗi phim ba segment rải khắp:
 
-Ở đây không cắt byte nào: playlist trả cho Stremio ghi thêm
-`#EXT-X-BYTERANGE:<trần>@70` cho mỗi segment, và **chính người chơi** bỏ qua 70
-byte đầu bằng một request Range. Dùng trần lớn thay cho độ dài thật, vì độ dài
-thật đòi một HEAD cho mỗi segment — 700 request cho một tập; CDN tự kẹp về hết
-file khi Range vượt quá.
+| Phim | TS bắt đầu ở |
+|---|---|
+| Thế Giới Hoàn Mỹ tập 288 | byte 70 (có bọc) |
+| Đại Chúa Tể tập 1 | byte 0 |
+| Tiên Nghịch tập 1 | byte 0 |
+| Thôn Phệ Tinh Không tập 141 | byte 0 |
 
-Nhờ vậy HH3D **không cần `STREMIO_PROXY`** như Nguồn C: segment đi thẳng từ máy
-người xem tới CDN, không header, không proxy. Và độ dài từng đoạn là số thật của
-họ, nên thanh thời gian và tua tới đều đúng.
+Bản đầu tiên cắt cứng 70 byte cho mọi phim, tức là **cắt mất 70 byte giữa gói TS
+đầu tiên** của ba phần tư số phim. ffmpeg tự dò lại nên trên PC không thấy gì, còn
+player chặt chẽ hơn phải dò lại ở từng segment — ra đúng triệu chứng "PC thì mượt,
+điện thoại thì lag", trong khi web của họ vẫn mượt vì họ không cắt gì khi không có
+gì để cắt.
+
+Nên độ lệch được **đo** cho từng phim (một segment là đủ, trong cùng phim chúng
+giống nhau), rồi playlist dựng theo hai cách:
+
+- **Phim không bọc** (phần lớn): trỏ thẳng CDN, không range, không proxy. HLS
+  thường đúng chuẩn, player nào cũng đọc được, và không byte nào của phim đi qua
+  addon.
+- **Phim có bọc**: trỏ qua `/hh3d-seg` của addon, chỗ đó bỏ đúng số byte đã đo rồi
+  giao phần còn lại — vẫn là HLS thường. Kèm hai thứ được thêm: CDN của họ chỉ gửi
+  `access-control-allow-origin: https://hoathinh3d.de` nên Stremio Web không gọi
+  trực tiếp được, qua đây thì mở cho mọi origin; và segment là bất biến nên cache
+  được ở biên Cloudflare.
+
+Cách cũ (`#EXT-X-BYTERANGE` với độ dài lấy trần) còn giữ sau `HH3D_DIRECT_SEGMENTS=1`
+để so sánh, nhưng **không nên dùng**: RFC 8216 đòi độ dài phải đúng, mà độ dài thật
+chỉ biết được bằng một HEAD cho mỗi segment (649 request một tập).
+
+Cả hai cách đều **không cần `STREMIO_PROXY`** như Nguồn C, và độ dài từng đoạn là
+số thật của họ nên thanh thời gian với tua tới đều đúng.
+
 
 Phần dò phim cũng không cần `curl` nữa — `hoathinh3d.de` trả `200` cho `fetch`
 thường, kể cả từ Cloudflare Workers, và sáu trang gọi song song đều `200` trong

@@ -4,7 +4,7 @@ import { getStreams } from './handlers/stream.js';
 import { probe } from './lib/http.js';
 import { unwrapEmbed, embedFetchable, resolveEmbed, inspectMedia } from './lib/embed.js';
 import { isStreamc, playlistOf, diagnose } from './lib/streamc.js';
-import { playlistFor as hh3dPlaylist } from './lib/hh3dPlayer.js';
+import { playlistFor as hh3dPlaylist, segmentAllowed as hh3dSegmentAllowed } from './lib/hh3dPlayer.js';
 import { routesTo } from './sources/nguonc.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
@@ -178,7 +178,7 @@ function prewarm(streams, baseUrl, defer) {
   if (!target) return;
 
   // Lỗi ở đây không được làm gì cả: response đã đi rồi.
-  const job = hh3dPlaylist(target).catch(() => null);
+  const job = hh3dPlaylist(target, { segmentBase: `${baseUrl}/hh3d-seg` }).catch(() => null);
   if (defer) defer(job);
 }
 
@@ -397,7 +397,7 @@ export async function handleRequest(req, res, { defer } = {}) {
       }
       let playlist;
       try {
-        playlist = await hh3dPlaylist(u);
+        playlist = await hh3dPlaylist(u, { segmentBase: `${baseUrlOf(req)}/hh3d-seg` });
       } catch (err) {
         return send(res, 502, { err: err.message, page: u });
       }
@@ -418,7 +418,7 @@ export async function handleRequest(req, res, { defer } = {}) {
       let playlist = null;
       let error = null;
       try {
-        playlist = await hh3dPlaylist(u);
+        playlist = await hh3dPlaylist(u, { segmentBase: `${baseUrlOf(req)}/hh3d-seg` });
       } catch (err) {
         error = err.message;
       }
@@ -430,6 +430,8 @@ export async function handleRequest(req, res, { defer } = {}) {
         page: u,
         ms: Date.now() - started,
         error,
+        via: playlist?.via ?? null,
+        offset: playlist?.offset ?? null,
         segments: playlist?.segments ?? 0,
         seconds: playlist?.seconds ?? null,
         label: playlist?.label ?? null,
@@ -439,6 +441,78 @@ export async function handleRequest(req, res, { defer } = {}) {
       });
     }
 
+    /**
+     * /hh3d-seg?u=<segment url> — một segment HH3D, đã bỏ lớp PNG.
+     *
+     * Vì sao phải đi qua đây thay vì để người chơi tự bỏ 70 byte đầu bằng
+     * `#EXT-X-BYTERANGE`: cách đó khai độ dài lớn hơn thật (không biết độ dài
+     * thật mà không HEAD từng segment — 649 request một tập), và RFC 8216 đòi độ
+     * dài phải đúng. ffmpeg bỏ qua chuyện đó nên Stremio trên PC xem mượt, còn
+     * player chặt chẽ hơn thì nhận ít byte hơn số đã xin và coi là lỗi rồi thử
+     * lại — ra đúng cảnh lag trên điện thoại.
+     *
+     * Đi qua đây còn được thêm hai thứ: CDN của họ chỉ gửi
+     * `access-control-allow-origin: https://hoathinh3d.de` nên Stremio Web không
+     * gọi trực tiếp được, còn qua đây thì mở cho mọi origin; và segment là bất
+     * biến nên cache được ở biên Cloudflare, lần xem sau không đi tới CDN nữa.
+     *
+     * Phải trả đúng Range: người chơi tua tới sẽ xin một khoảng, và khoảng đó
+     * tính trên vật thể ĐÃ bỏ 70 byte, nên phải dịch sang khoảng của file gốc
+     * rồi dịch câu trả lời ngược lại.
+     */
+    if (path === '/hh3d-seg') {
+      const u = url?.searchParams?.get('u') || '';
+      if (!hh3dSegmentAllowed(u)) {
+        return send(res, 400, { err: 'host segment không nằm trong HH3D_SEGMENT_HOSTS', segment: u || null });
+      }
+
+      // Số byte cần bỏ do playlist quyết định, vì nó khác nhau theo từng phim: 0
+      // với phim không bọc PNG, 70 với phim bọc. Chặn trên cho chắc.
+      const skip = Math.min(4096, Math.max(0, Number(url?.searchParams?.get('skip')) || 0));
+
+      const asked = req.headers.range || '';
+      const m = /^bytes=(\d*)-(\d*)$/.exec(asked.trim());
+      const from = m && m[1] ? Number(m[1]) : 0;
+      const to = m && m[2] ? Number(m[2]) : null;
+      const upstreamRange = `bytes=${skip + from}-${to == null ? '' : skip + to}`;
+
+      try {
+        const hit = await fetch(u, {
+          headers: { 'user-agent': CONFIG.userAgent, referer: `${CONFIG.hh3dBase}/`, range: upstreamRange },
+          signal: AbortSignal.timeout(CONFIG.httpTimeout),
+        });
+        if (!hit.ok && hit.status !== 206) {
+          return send(res, 502, { err: `segment trả HTTP ${hit.status}`, segment: u });
+        }
+
+        // Tổng kích thước thật nằm trong Content-Range của CDN; trừ 70 byte ra
+        // là kích thước vật thể mà người chơi nhìn thấy.
+        const total = Number(/\/(\d+)$/.exec(hit.headers.get('content-range') || '')?.[1]);
+        const size = Number.isFinite(total) ? total - skip : null;
+        const headers = {
+          'access-control-allow-origin': '*',
+          'content-type': 'video/mp2t',
+          'accept-ranges': 'bytes',
+          // Segment không bao giờ đổi nội dung, nên cache dài và để biên
+          // Cloudflare trả cho lần xem sau.
+          'cache-control': 'public, max-age=86400, s-maxage=604800, immutable',
+        };
+        const length = hit.headers.get('content-length');
+        if (length) headers['content-length'] = length;
+
+        if (m && size != null) {
+          const last = to == null ? size - 1 : Math.min(to, size - 1);
+          res.writeHead(206, { ...headers, 'content-range': `bytes ${from}-${last}/${size}` });
+        } else {
+          res.writeHead(200, headers);
+        }
+        // Workers nhận ReadableStream nên byte chảy qua chứ không phải đệm hết
+        // vào RAM; node:http thì không, nên bản chạy ở nhà đệm từng segment.
+        return res.end(CONFIG.onWorkers ? hit.body : Buffer.from(await hit.arrayBuffer()));
+      } catch (err) {
+        return send(res, 502, { err: err.message, segment: u });
+      }
+    }
     // /probe/seg?u=<segment url>&r=<referer> — liệu deployment này có gọi được CDN
     // segment hay không. Câu hỏi riêng, vì CDN đó là tên miền khác với trang
     // embed và có thể không nằm sau cùng một lớp chặn.
