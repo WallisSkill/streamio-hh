@@ -54,31 +54,6 @@ import { cacheGet, cacheSet } from './cache.js';
  */
 const RANGE_CAP = 20_000_000;
 
-/** CDN chứa segment HH3D. Ghi đè bằng HH3D_SEGMENT_HOSTS khi họ đổi. */
-function segmentHosts() {
-  return String(CONFIG.hh3dSegmentHosts || '')
-    .split(',')
-    .map((h) => h.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-/**
- * Chỉ proxy segment của đúng mấy host này.
- *
- * Không có dòng chặn đó thì /hh3d-seg là một proxy mở: ai biết địa chỉ cũng sai
- * khiến nó tải hộ bất cứ thứ gì.
- */
-export function segmentAllowed(candidate) {
-  try {
-    const at = new URL(candidate);
-    if (at.protocol !== 'https:' && at.protocol !== 'http:') return false;
-    const host = at.hostname.toLowerCase();
-    return segmentHosts().some((h) => host === h || host.endsWith(`.${h}`));
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Dữ liệu TS bắt đầu ở byte thứ mấy của một segment.
  *
@@ -99,10 +74,10 @@ export function segmentAllowed(candidate) {
  * đúng là chỗ có 0x47 lặp lại đúng ba lần cách nhau 188 byte. Không thấy thì trả
  * 0 — giao nguyên văn còn hơn tự cắt theo phỏng đoán.
  */
-async function tsOffset(segmentUrl) {
+async function tsOffset(segmentUrl, referer) {
   try {
     const res = await fetch(segmentUrl, {
-      headers: { 'user-agent': CONFIG.userAgent, referer: `${CONFIG.hh3dBase}/`, range: 'bytes=0-2047' },
+      headers: { 'user-agent': CONFIG.userAgent, referer, range: 'bytes=0-2047' },
       signal: AbortSignal.timeout(CONFIG.httpTimeout),
     });
     if (!res.ok && res.status !== 206) return 0;
@@ -284,7 +259,7 @@ async function once(pageUrl, segmentBase) {
   if (!urls.length) return null;
 
   // Đo một segment là đủ: trong cùng một phim chúng giống nhau.
-  const offset = await tsOffset(urls[0]);
+  const offset = await tsOffset(urls[0], `${new URL(pageUrl).origin}/`);
 
   let segments = 0;
   const lines = [];
@@ -302,7 +277,12 @@ async function once(pageUrl, segmentBase) {
       // của phim đi qua addon.
       lines.push(at);
     } else if (segmentBase) {
-      lines.push(`${segmentBase}?u=${encodeURIComponent(at)}&skip=${offset}`);
+      // Trỏ theo TRANG TẬP và số thứ tự, không theo URL của CDN. Nhờ vậy
+      // /hh3d-seg không bao giờ tải một địa chỉ do người gọi đặt ra: nó tự dựng
+      // lại playlist rồi lấy đúng segment thứ i. Không cần danh sách host CDN —
+      // mà danh sách đó cũng đã cũ đúng lúc họ đổi tên miền (CDN đổi theo:
+      // m.ckjdsib32rkjvsd.xyz -> scontent-sin11-1.xx.cdnfb.net).
+      lines.push(`${segmentBase}?p=${encodeURIComponent(pageUrl)}&i=${segments - 1}`);
     } else {
       lines.push(`#EXT-X-BYTERANGE:${RANGE_CAP}@${offset}`);
       lines.push(at);
@@ -316,6 +296,7 @@ async function once(pageUrl, segmentBase) {
     body: lines.join('\n'),
     via: !offset ? 'direct' : segmentBase ? 'proxy' : 'byterange',
     offset,
+    urls,
     segments,
     seconds: Number(seconds.toFixed(1)),
     label: config.label,

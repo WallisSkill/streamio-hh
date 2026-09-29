@@ -383,6 +383,42 @@ ai gắn Referer hộ segment nữa.
 Kiểm tra một tập bất kỳ bằng `/probe/embed` — với embed streamc nó báo grant có
 về không, playlist có bao nhiêu segment, và segment đầu tiên tải được hay không.
 
+### Tên miền HH3D tự dò, không đóng cứng
+
+Họ đổi tên miền liên tục — `hoathinh3d.so` rồi `.de` rồi `.you` chỉ trong khoảng
+một tháng. Đóng cứng địa chỉ (vào code hay vào `HH3D_BASE`) là hẹn trước một lần
+hỏng: DNS mất, mọi request timeout, HH3D biến mất khỏi Stremio mà không có dòng
+log nào nói vì sao.
+
+Nên mặc định `HH3D_BASE` để **rỗng** và addon đi theo link rút gọn họ công bố.
+Chuỗi chuyển hướng có chặng trung gian nên phải lấy URL **cuối**:
+
+```
+bit.ly/hh3d  ->  301 googie.top  ->  hoathinh3d.you
+```
+
+Ba điều kèm theo:
+
+- **Soi tên miền cuối trước khi tin.** Link rút gọn là của người khác; ai đổi đích
+  thì addon đi theo đó mà gọi. Chỉ nhận tên miền còn chứa `HH3D_HOST_HINT` (mặc
+  định `hoathinh3d`), nên chặng `googie.top` bị loại. Họ đổi hẳn tên thương hiệu
+  thì sửa một biến môi trường, không phải sửa code.
+- **Quên ngay khi mạng chết.** Dò được thì nhớ 6 giờ (`HH3D_BASE_TTL`), nhưng
+  request tới HH3D chết ở tầng mạng thì addon quên luôn và dò lại ở lần gọi sau —
+  đó đúng là dấu hiệu họ vừa đổi tên miền. Còn 403/404 thì để nguyên: tên miền vẫn
+  sống, chỉ là trang đó không có.
+- **`HH3D_BASE` đặt tay vẫn thắng**, để ghim khi cần và để test khỏi phụ thuộc
+  mạng ngoài.
+
+CDN chứa segment cũng đổi theo tên miền (`m.ckjdsib32rkjvsd.xyz` ->
+`scontent-sin11-1.xx.cdnfb.net`), nên `/hh3d-seg` **không** nhận URL của CDN nữa
+mà nhận trang tập kèm số thứ tự đoạn (`?p=<trang tập>&i=<số>`): nó tự dựng lại
+playlist rồi lấy đúng đoạn thứ `i`. Nhờ vậy không cần danh sách host nào — địa chỉ
+đi ra luôn do chính addon dựng, nên đây cũng không phải proxy mở. Dựng lại gần như
+luôn chỉ là đọc cache vì Stremio vừa gọi `/hh3d.m3u8` ngay trước đó.
+
+Kiểm tên miền đang dùng bằng `/probe/hh3d?u=<trang tập>` — nó báo `base`.
+
 ### HH3D phát trực tiếp bằng cách nào
 
 Trang tập HH3D **không** đặt link phát trong HTML — chỉ có `player_key_url` trỏ
@@ -472,7 +508,8 @@ socket keep-alive đã chết. Phim nào rỗng nguồn ở mọi tập thì là
 ## Cấu hình
 
 Xem `.env.example`: `PORT`, `ADDON_BASE_URL`, `KKPHIM_API`, `OPHIM_API`,
-`NGUONC_API`, `HH3D_BASE`, `ENABLE_KKPHIM`, `ENABLE_OPHIM`, `ENABLE_NGUONC`,
+`NGUONC_API`, `HH3D_BASE` (rỗng = tự dò), `HH3D_SHORTLINK`, `HH3D_BASE_TTL`,
+`HH3D_HOST_HINT`, `ENABLE_KKPHIM`, `ENABLE_OPHIM`, `ENABLE_NGUONC`,
 `ENABLE_HH3D`, `RESOLVE_EMBEDS`, `EMBED_HOSTS`, `EMBED_TTL`, `CACHE_TTL`.
 
 ## Ghi chú

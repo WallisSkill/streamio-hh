@@ -7,7 +7,8 @@ http.createServer(handleRequest).listen(CONFIG.port, () => {
   console.log(`[addon] ${MANIFEST.name} on http://localhost:${CONFIG.port}/manifest.json`);
   console.log(
     `[addon] kkphim=${CONFIG.enableKkphim} ophim=${CONFIG.enableOphim}` +
-      ` nguonc=${CONFIG.enableNguonc} hh3d=${CONFIG.enableHh3d}`,
+      ` nguonc=${CONFIG.enableNguonc} hh3d=${CONFIG.enableHh3d}` +
+      ` (hh3d base: ${CONFIG.hh3dBase || "tự dò qua " + CONFIG.hh3dShortlink})`,
   );
   // Nguồn C only plays through the viewer's own streaming server; without it
   // its episodes fall back to an external link, and the line above alone would

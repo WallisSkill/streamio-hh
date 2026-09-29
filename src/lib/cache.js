@@ -12,6 +12,10 @@ export function cacheGet(key) {
   return hit.value;
 }
 
+export function cacheDelete(key) {
+  store.delete(key);
+}
+
 export function cacheSet(key, value, ttl = CONFIG.cacheTtl) {
   // cheap bound: drop oldest when large
   if (store.size > 2000) {

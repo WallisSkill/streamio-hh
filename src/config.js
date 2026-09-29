@@ -46,7 +46,17 @@ export const CONFIG = {
   nguoncUpstream,
   nguoncProxy,
   nguoncProxyIgnored,
-  hh3dBase: (env.HH3D_BASE || 'https://hoathinh3d.de').replace(/\/+$/, ''),
+  // Để RỖNG là tự dò qua link rút gọn của họ, và đó là mặc định: tên miền HH3D
+  // đổi liên tục (.so -> .de -> .you trong một tháng). Đặt tay thì ghim cứng.
+  hh3dBase: (env.HH3D_BASE || '').replace(/[/]+$/, ''),
+  // Link rút gọn họ công bố, luôn trỏ về bản đang sống.
+  hh3dShortlink: env.HH3D_SHORTLINK || 'https://bit.ly/hh3d',
+  // Dò lại sau bao lâu. Ngắn hơn cũng không cần: khi request tới HH3D chết ở
+  // tầng mạng thì addon quên ngay và dò lại, không đợi hết hạn.
+  hh3dBaseTtl: Number(env.HH3D_BASE_TTL || 21600) * 1000,
+  // Chỉ tin tên miền còn mang thương hiệu này — link rút gọn là của người khác,
+  // ai đổi đích thì addon đi theo đó mà gọi. Đổi hẳn tên thì sửa biến này.
+  hh3dHostHint: String(env.HH3D_HOST_HINT || 'hoathinh3d').toLowerCase(),
   enableOphim: bool(env.ENABLE_OPHIM, true),
   enableNguonc: bool(env.ENABLE_NGUONC, !onServerless || Boolean(nguoncUpstream || nguoncProxy)),
   enableKkphim: bool(env.ENABLE_KKPHIM, true),
@@ -60,9 +70,6 @@ export const CONFIG = {
     .filter(Boolean),
   embedTtl: Number(env.EMBED_TTL || 300) * 1000,
   onWorkers,
-  // CDN chứa segment của HH3D. Chỉ mấy host này được /hh3d-seg tải hộ, để nó
-  // không thành proxy mở. Đo 22/09/2026: cả 8 phim thử đều nằm trên một host.
-  hh3dSegmentHosts: env.HH3D_SEGMENT_HOSTS || 'm.ckjdsib32rkjvsd.xyz',
   // Trỏ segment thẳng vào CDN kèm #EXT-X-BYTERANGE thay vì đi qua addon: nhanh
   // hơn và không tốn băng thông, nhưng độ dài khai trong playlist không đúng
   // chuẩn nên player chặt chẽ (điện thoại) thử lại liên tục và xem bị lag.

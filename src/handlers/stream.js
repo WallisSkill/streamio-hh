@@ -10,6 +10,7 @@ import { baseTitle, titleHead } from '../lib/text.js';
 import { getOverride } from '../lib/overrides.js';
 import { unwrapEmbed, embedFetchable } from '../lib/embed.js';
 import { isStreamc } from '../lib/streamc.js';
+import { hh3dBase } from '../lib/hh3dBase.js';
 import { MANIFEST } from '../manifest.js';
 
 /**
@@ -442,7 +443,7 @@ async function hh3dStream(target, parsed, dbg, baseUrl, vnTitles = []) {
     hh3dRow({
       name: target.name,
       epNum,
-      page: `${CONFIG.hh3dBase}/xem-phim-${entry.slug}/tap-${epNum}-sv1.html`,
+      page: `${await hh3dBase()}/xem-phim-${entry.slug}/tap-${epNum}-sv1.html`,
       note: 'Dựng link từ slug đã ghim',
       baseUrl,
       slug: entry.slug,

@@ -2,6 +2,7 @@ import { CONFIG } from '../config.js';
 import { safe } from '../lib/http.js';
 import { cached } from '../lib/cache.js';
 import { detectSeason, decodeEntities } from '../lib/text.js';
+import { hh3dBase, forgetHh3dBase } from '../lib/hh3dBase.js';
 
 /**
  * HH3D (hoathinh3d) — trang tìm kiếm, trang phim, và link từng tập.
@@ -30,17 +31,29 @@ const RX_ORIG = /<p[^>]*class="[^"]*original_title[^"]*"[^>]*>([^<]*)/;
 const RX_EPISODE_LINK = /href="(https?:[/][/][^"]*[/]xem-phim-[^"]+[/]tap-([0-9]+)-sv([0-9]+)[.]html)"/g;
 const RX_SHOW_URL = /^https?:[/][/][^/]+[/][a-z0-9-]+[/]?$/i;
 
-/** Một trang công khai của HH3D, kèm URL cuối sau chuyển hướng. */
+/**
+ * Một trang công khai của HH3D, kèm URL cuối sau chuyển hướng.
+ *
+ * Chết ở tầng mạng thì quên tên miền đang dùng: đó đúng là dấu hiệu họ vừa đổi
+ * tên miền (DNS của `.de` mất hẳn), và lần gọi sau sẽ dò lại thay vì đợi hết hạn
+ * cache. Còn 403/404 thì để nguyên — tên miền vẫn sống, chỉ là trang đó không có.
+ */
 async function fetchPage(url) {
-  const res = await fetch(url, {
+  let res;
+  try {
+    res = await fetch(url, {
     redirect: 'follow',
     signal: AbortSignal.timeout(CONFIG.httpTimeout),
     headers: {
       'user-agent': CONFIG.userAgent,
       accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'accept-language': 'vi-VN,vi;q=0.9,en;q=0.8',
-    },
-  });
+      },
+    });
+  } catch (err) {
+    forgetHh3dBase();
+    throw err;
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return { body: await res.text(), finalUrl: res.url };
 }
@@ -48,7 +61,7 @@ async function fetchPage(url) {
 /** Search hh3d. Note: a single strong match makes WordPress redirect to the show page. */
 export async function search(keyword) {
   if (!keyword || !CONFIG.enableHh3d) return [];
-  const url = `${CONFIG.hh3dBase}/?s=${encodeURIComponent(keyword)}`;
+  const url = `${await hh3dBase()}/?s=${encodeURIComponent(keyword)}`;
   const res = await safe(cached(`hh3d:search:${keyword}`, () => fetchPage(url)), 'hh3d-search');
   if (!res) return [];
   const { body, finalUrl } = res;
@@ -98,7 +111,8 @@ function toCandidate({ link, name, originName, year }) {
 export async function detail(slug) {
   if (!slug || !CONFIG.enableHh3d) return null;
   return cached(`hh3d:detail:${slug}`, async () => {
-    const res = await safe(fetchPage(`${CONFIG.hh3dBase}/${slug}`), 'hh3d-detail');
+    const base = await hh3dBase();
+    const res = await safe(fetchPage(`${base}/${slug}`), 'hh3d-detail');
     if (!res) return null;
     const { body } = res;
 
@@ -118,7 +132,7 @@ export async function detail(slug) {
     return {
       source: 'hh3d',
       slug,
-      url: `${CONFIG.hh3dBase}/${slug}`,
+      url: `${base}/${slug}`,
       name,
       originName: decodeEntities(RX_ORIG.exec(body)?.[1] || ''),
       altNames: [],
