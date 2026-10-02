@@ -11,6 +11,7 @@ import { getOverride } from '../lib/overrides.js';
 import { unwrapEmbed, embedFetchable } from '../lib/embed.js';
 import { isStreamc } from '../lib/streamc.js';
 import { hh3dBase } from '../lib/hh3dBase.js';
+import { playlistFor as hh3dPlaylist } from '../lib/hh3dPlayer.js';
 import { MANIFEST } from '../manifest.js';
 
 /**
@@ -346,15 +347,25 @@ function hh3dTitle(name) {
 /**
  * Một dòng HH3D.
  *
- * Link phát lấy lúc bấm phát, ở /hh3d.m3u8 — nó tốn hai lượt gọi và một lần giải
- * mã AES-GCM, không đáng làm lúc dựng danh sách. Không biết địa chỉ công khai của
- * chính addon thì không dựng được URL đó, và khi ấy trang tập là thứ duy nhất còn
- * đưa ra được.
+ * Link phát được lấy NGAY LÚC DỰNG DANH SÁCH, không để tới lúc bấm phát. Trước
+ * đây làm ngược lại để danh sách ra nhanh hơn, và cái giá là một dòng chết: khi
+ * HH3D đổi cách giao link (họ vừa chuyển cả site từ `type: hls` sang
+ * `type: embed`), dòng HH3D vẫn hiện ra, vẫn đứng đầu, và Stremio bấm vào thì
+ * báo không kết nối được. Thà chờ thêm một nhịp còn hơn bày ra thứ không chạy.
+ *
+ * Tốn thêm chừng một giây cho phim có HH3D, nhưng không tốn thêm request: trước
+ * đó addon vẫn làm đúng việc này ở chế độ làm nóng, chỉ là làm sau khi đã trả lời.
+ * Bù lại cú bấm phát giờ chỉ còn đọc cache.
  *
  * Segment của HH3D không đòi header nào, nên dòng này phát được cả trên máy xem
  * không có server nội bộ của Stremio — khác Nguồn C.
  */
-function hh3dRow({ name, epNum, page, note, baseUrl, slug }) {
+async function hh3dRow({ name, epNum, page, note, baseUrl, slug }) {
+  // Dựng được playlist thì mới có dòng. Không được thì bỏ hẳn, để dòng đầu là
+  // một nguồn chạy được chứ không phải một nguồn chết.
+  const playlist = baseUrl ? await hh3dPlaylist(page, { segmentBase: `${baseUrl}/hh3d-seg` }).catch(() => null) : null;
+  if (baseUrl && !playlist) return null;
+
   const url = baseUrl ? `${baseUrl}/hh3d.m3u8?u=${encodeURIComponent(page)}` : null;
   const title = [name, `▶ Tập ${epNum}`, note, url ? '⟳ Lấy link lúc bấm phát' : '↗ Mở trên hoathinh3d']
     .filter(Boolean)
@@ -419,16 +430,15 @@ async function hh3dStream(target, parsed, dbg, baseUrl, vnTitles = []) {
     });
     dbg.decision = picked.decision;
     if (!picked.episode) return [];
-    return [
-      hh3dRow({
-        name: entry.name,
-        epNum: picked.episode.num,
-        page: picked.episode.page,
-        note: picked.decision.note,
-        baseUrl,
-        slug: entry.slug,
-      }),
-    ];
+    const row = await hh3dRow({
+      name: entry.name,
+      epNum: picked.episode.num,
+      page: picked.episode.page,
+      note: picked.decision.note,
+      baseUrl,
+      slug: entry.slug,
+    });
+    return row ? [row] : [];
   }
 
   // Pinned slug while the site is unreachable -> build the permalink directly.
@@ -439,16 +449,15 @@ async function hh3dStream(target, parsed, dbg, baseUrl, vnTitles = []) {
       : parsed.episode ?? 1;
   epNum += target.override?.offset || 0;
   dbg.decision = { mode: 'pinned', target: epNum, confidence: 'medium', note: 'Dựng link từ slug đã ghim' };
-  return [
-    hh3dRow({
-      name: target.name,
-      epNum,
-      page: `${await hh3dBase()}/xem-phim-${entry.slug}/tap-${epNum}-sv1.html`,
-      note: 'Dựng link từ slug đã ghim',
-      baseUrl,
-      slug: entry.slug,
-    }),
-  ];
+  const pinnedRow = await hh3dRow({
+    name: target.name,
+    epNum,
+    page: `${await hh3dBase()}/xem-phim-${entry.slug}/tap-${epNum}-sv1.html`,
+    note: 'Dựng link từ slug đã ghim',
+    baseUrl,
+    slug: entry.slug,
+  });
+  return pinnedRow ? [pinnedRow] : [];
 }
 
 /**

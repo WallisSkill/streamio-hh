@@ -10,7 +10,7 @@
 /** Những status mà chuẩn HTTP cấm mang body — Response sẽ ném lỗi nếu cố nhét. */
 const BODYLESS = new Set([101, 204, 205, 304]);
 
-export function toResponse(handler, request, ctx) {
+export function toResponse(handler, request) {
   return new Promise((resolve, reject) => {
     const url = new URL(request.url);
 
@@ -58,10 +58,7 @@ export function toResponse(handler, request, ctx) {
     try {
       // Router bắt lỗi bên trong và tự trả 500, nhưng nếu nó vỡ trước khi kịp
       // gọi end() thì promise này sẽ treo — nên bắt cả hai lối thoát.
-      // ctx.waitUntil: việc làm nóng cache chạy sau khi response đã đi ra, và
-      // không có nó thì Workers hủy promise ngay lúc đó.
-      const defer = ctx?.waitUntil ? (promise) => ctx.waitUntil(promise) : undefined;
-      Promise.resolve(handler(req, res, { defer })).catch(reject);
+      Promise.resolve(handler(req, res)).catch(reject);
     } catch (err) {
       reject(err);
     }
