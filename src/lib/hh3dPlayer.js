@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { cacheGet, cacheSet } from './cache.js';
+import { hh3dBase } from './hh3dBase.js';
 
 /**
  * HH3D (hoathinh3d) -> một playlist Stremio phát được.
@@ -179,9 +180,100 @@ async function playerConfig(pageUrl) {
   );
   const data = JSON.parse(new TextDecoder().decode(plain));
 
-  // Tập không có nguồn phát trả về { data: { sources: "" } } — đúng hình dạng
-  // nhưng rỗng, nên phải xét `file` chứ không xét `status`.
-  return data?.file ? { file: data.file, label: data.label || null, skip: Number(data.skip_time) || 0 } : null;
+  // HH3D giao theo hai kiểu, và đổi giữa chúng lúc nào cũng được: `file` là
+  // playlist HLS thẳng, `embed_url` là trang player của CDN (xem
+  // playlistFromEmbed). Tập không có nguồn phát trả về { data: { sources: "" } }
+  // — đúng hình dạng nhưng rỗng, nên xét hai trường đó chứ không xét `status`.
+  const common = { label: data?.label || null, skip: Number(data?.skip_time) || 0 };
+  if (data?.file) return { ...common, file: data.file };
+  if (data?.embed_url) return { ...common, embedUrl: data.embed_url };
+  return null;
+}
+
+/**
+ * Trang embed -> nội dung playlist, cho những phim HH3D giao theo kiểu `embed`.
+ *
+ * Ngày 02/10/2026 HH3D chuyển toàn bộ server sang kiểu này: `player.php` thôi
+ * trả `file` mà trả `embed_url` trỏ sang trang player của CDN. Link phát nằm sau
+ * hai lớp nữa, cả hai đọc được từ chính trang embed đó:
+ *
+ *   1. Thẻ `#player` mang hai thuộc tính `data-p` và `data-m`. Mở ra bằng XOR
+ *      lặp: khoá là `data-m` ĐẢO CHUỖI rồi base64, dữ liệu là `data-p` base64.
+ *      Kết quả là JSON `{ c, k, i, s, ao }` — `s` là đường dẫn stream kèm token
+ *      đã ký, `k` và `i` là khoá và IV cho bước sau, `ao` là origin được phép.
+ *   2. Tải `s` thì nhận về một khối base64, không phải m3u8. Giải AES-GCM bằng
+ *      `k`/`i` mới ra playlist thật.
+ *
+ * Tìm ra bằng cách đọc tĩnh bundle player 241 KB của họ: nó làm rối theo kiểu
+ * obfuscator.io (mảng chuỗi xoay 168 bước, mỗi chuỗi là base64 bảng CHỮ THƯỜNG
+ * TRƯỚC rồi RC4 theo khoá riêng từng lời gọi). Dịch 2358 chuỗi ra thì phần
+ * `getAttribute("data-p")` và lời gọi `crypto.subtle` lộ nguyên hình. Lúc đầu
+ * tôi đoán lớp 1 cũng là AES và thử 40 tổ hợp khoá/IV — sai, nó chỉ là XOR.
+ *
+ * Lớp bảo vệ này sống hay chết là do họ: tên file bundle băm theo nội dung nên
+ * họ build lại lúc nào cũng được. Hỏng thì /probe/hh3d báo ngay ở bước nào.
+ */
+async function playlistFromEmbed(embedUrl) {
+  const referer = `${await hh3dBase()}/`;
+  const res = await fetch(embedUrl, {
+    headers: { 'user-agent': CONFIG.userAgent, referer },
+    signal: AbortSignal.timeout(CONFIG.httpTimeout),
+  });
+  if (!res.ok) return null;
+  const page = await res.text();
+
+  const dataP = /data-p="([^"]+)"/.exec(page)?.[1];
+  const dataM = /data-m="([^"]+)"/.exec(page)?.[1];
+  if (!dataP || !dataM) return null;
+
+  const key = b64url([...dataM].reverse().join(''));
+  const data = b64url(dataP);
+  if (!key.length || !data.length) return null;
+  const plain = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i += 1) plain[i] = data[i] ^ key[i % key.length];
+
+  let grant;
+  try {
+    grant = JSON.parse(new TextDecoder().decode(plain));
+  } catch {
+    return null;
+  }
+  if (!grant?.s && !grant?.c) return null;
+  if (!grant?.k || !grant?.i) return null;
+
+  const streamUrl = new URL(grant.s || grant.c, embedUrl).href;
+  const body = await fetch(streamUrl, {
+    headers: { 'user-agent': CONFIG.userAgent, referer: embedUrl },
+    signal: AbortSignal.timeout(CONFIG.httpTimeout),
+  });
+  if (!body.ok) return null;
+  const sealed = (await body.text()).trim();
+
+  // Hai đường cùng tồn tại: `s` (đường có token) trả thẳng m3u8, còn `c` trả một
+  // khối base64 phải giải AES-GCM. Nhận cả hai thay vì đoán, vì họ đổi được bất
+  // cứ lúc nào — và tôi đã mắc đúng chỗ này một lần: fetch `s` rồi vẫn đem đi
+  // giải mã, nên hỏng im lặng.
+  if (/^#EXTM3U/.test(sealed)) return { text: sealed, base: streamUrl };
+
+  try {
+    const aes = await crypto.subtle.importKey('raw', b64url(grant.k), { name: 'AES-GCM' }, false, ['decrypt']);
+    const opened = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64url(grant.i) }, aes, b64url(sealed));
+    return { text: new TextDecoder().decode(opened), base: streamUrl };
+  } catch {
+    return null;
+  }
+}
+
+/** Nội dung playlist của một tập, bất kể HH3D giao theo kiểu nào. */
+async function playlistSource(config) {
+  if (config.embedUrl) return playlistFromEmbed(config.embedUrl);
+
+  const res = await fetch(config.file, {
+    headers: { 'user-agent': CONFIG.userAgent },
+    signal: AbortSignal.timeout(CONFIG.httpTimeout),
+  });
+  if (!res.ok) return null;
+  return { text: await res.text(), base: config.file };
 }
 
 /**
@@ -239,12 +331,9 @@ async function once(pageUrl, segmentBase) {
   const config = await playerConfig(pageUrl);
   if (!config) return null;
 
-  const res = await fetch(config.file, {
-    headers: { 'user-agent': CONFIG.userAgent },
-    signal: AbortSignal.timeout(CONFIG.httpTimeout),
-  });
-  if (!res.ok) return null;
-  const text = await res.text();
+  const source = await playlistSource(config);
+  if (!source) return null;
+  const { text, base } = source;
   if (!/^#EXTM3U/.test(text.trim())) return null;
 
   // Playlist nhiều chất lượng thì từng dòng con lại là một playlist nữa, và viết
@@ -255,7 +344,7 @@ async function once(pageUrl, segmentBase) {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith('#'))
-    .map((l) => new URL(l, config.file).href);
+    .map((l) => new URL(l, base).href);
   if (!urls.length) return null;
 
   // Đo một segment là đủ: trong cùng một phim chúng giống nhau.
