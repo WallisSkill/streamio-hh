@@ -33,6 +33,28 @@ const CASES = [
     want: {},
     why: 'Soul Land 2: phụ đề lệch (Clan/Sect) -> khớp phần trước dấu hai chấm',
   },
+  {
+    // Ca này hết giá trị khi tập 244 lên sóng — lúc đó nó phải CÓ stream.
+    id: 'series/tt17050076:5:36',
+    source: 'nguonc',
+    wantNoStream: true,
+    want: {},
+    why: 'S5E36 = tập 244, nguồn mới có 243: chưa ra thì không được đoán sang tập 36',
+  },
+  {
+    id: 'series/tt17050076:5:1',
+    source: 'nguonc',
+    wantStream: 'Nguồn C',
+    want: { mode: 'absolute', target: 209 },
+    why: 'S5E1: bỏ mục 26 tập (đoán "tập 1") để rơi xuống mục gộp -> tập 209',
+  },
+  {
+    id: 'series/tt27432264:0:1',
+    source: 'hh3d',
+    wantStream: 'KKPhim',
+    want: { mode: 'special' },
+    why: 'Tiên Nghịch S0E1: tập đặc biệt chỉ nhận mục phim lẻ, không ép vào tập 1 phim chính',
+  },
 ];
 
 let pass = 0;
@@ -45,9 +67,11 @@ for (const c of CASES) {
   const okTarget = c.want.target === undefined || d.target === c.want.target;
   // `includes` chứ không phải `startsWith`: tên stream mang tiền tố thương hiệu
   // ở đầu, đổi tên addon không được làm hỏng bộ test.
-  const okStream = c.wantStream
-    ? (json.streams || []).some((s) => String(s.name || '').includes(c.wantStream))
-    : (json.streams || []).length > 0;
+  const okStream = c.wantNoStream
+    ? (json.streams || []).length === 0
+    : c.wantStream
+      ? (json.streams || []).some((s) => String(s.name || '').includes(c.wantStream))
+      : (json.streams || []).length > 0;
   const ok = okMode && okTarget && okStream;
   if (ok) pass++;
   console.log(
