@@ -1,0 +1,27 @@
+{
+  "_doc": [
+    "Phụ đề ghim tay. Khoá là id Stremio: 'tt1375666' cho phim lẻ, 'tt0903747:1:1'",
+    "cho một tập cụ thể, hoặc 'tt0903747' để dùng chung cho cả bộ.",
+    "",
+    "Mỗi mục:",
+    "  url    (bắt buộc) địa chỉ .srt hoặc .vtt, phải cho phép tải chéo nguồn (CORS).",
+    "  label  (nên có)   chữ hiện trong Stremio, ghi rõ bản release cho dễ chọn.",
+    "  lang   (tuỳ)      mã ISO 639-2, mặc định 'vie'.",
+    "  match  (tuỳ)      một mẩu chữ trong TÊN TỆP của bản release. Có nó thì phụ",
+    "                    đề chỉ nhận đúng bản đó — đây là chỗ quyết định khớp tiếng",
+    "                    hay lệch tiếng khi bạn xem torrent.",
+    "",
+    "Trên Cloudflare Workers không có tệp: dán nguyên nội dung này vào biến môi",
+    "trường SUBTITLES trong wrangler.toml."
+  ],
+  "_ví_dụ": {
+    "tt1375666": [
+      {
+        "label": "Inception 2010 1080p BluRay x264",
+        "url": "https://example.com/inception.1080p.bluray.srt",
+        "match": "bluray",
+        "lang": "vie"
+      }
+    ]
+  }
+}

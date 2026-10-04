@@ -35,6 +35,10 @@ export default {
         const { setOverrides } = await import('../src/lib/overrides.js');
         setOverrides(env.OVERRIDES);
       }
+      if (env.SUBTITLES) {
+        const { setSubtitlePins } = await import('../src/lib/subtitlePins.js');
+        setSubtitlePins(env.SUBTITLES);
+      }
 
       return await toResponse(handleRequest, request);
     } catch (err) {

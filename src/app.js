@@ -7,6 +7,7 @@ import { isStreamc, playlistOf, diagnose } from './lib/streamc.js';
 import { playlistFor as hh3dPlaylist } from './lib/hh3dPlayer.js';
 import { hh3dBase, isHh3dPage } from './lib/hh3dBase.js';
 import { routesTo } from './sources/nguonc.js';
+import { pinsFor } from './lib/subtitlePins.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
 
@@ -215,6 +216,34 @@ export async function handleRequest(req, res) {
       return send(res, 200, { streams, cacheMaxAge: 600 }, { edge: true });
     }
 
+    /**
+     * /subtitles/:type/:id/:extra.json — phụ đề cho phim đang xem.
+     *
+     * Stremio hỏi MỌI addon có khai `subtitles` theo id của phim, không quan tâm
+     * luồng đang phát do addon nào cung cấp. Nên phụ đề ghim ở đây gắn được vào
+     * cả torrent của addon khác, không riêng phim do addon này phục vụ.
+     *
+     * `extra` là chuỗi kiểu query mà Stremio gắn thêm khi biết: `filename`,
+     * `videoHash`, `videoSize`. `filename` là thứ đáng giá nhất — nó cho biết
+     * đang xem BẢN RELEASE nào, và phụ đề khớp bản thì mới khớp tiếng.
+     */
+    const sub = /^\/subtitles\/(movie|series)\/(.+?)(?:\.json)?$/.exec(path);
+    if (sub) {
+      const [, , rest] = sub;
+      const cut = rest.indexOf('/');
+      const id = cut === -1 ? rest : rest.slice(0, cut);
+      const extra = new URLSearchParams(cut === -1 ? '' : rest.slice(cut + 1));
+      const filename = extra.get('filename') || '';
+
+      const subtitles = pinsFor(id, filename).map((s, i) => ({
+        id: `wisfilm-${i}`,
+        url: s.url,
+        lang: s.lang || 'vie',
+        ...(s.label ? { label: s.label } : {}),
+      }));
+
+      return send(res, 200, { subtitles, cacheMaxAge: 1800 }, { edge: true });
+    }
     // /debug/:type/:id — shows how the episode was matched
     const d = /^\/debug\/(movie|series)\/(.+?)(?:\.json)?$/.exec(path);
     if (d) {
