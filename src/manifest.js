@@ -2,7 +2,11 @@ export const MANIFEST = {
   // Giữ nguyên id cũ: đổi id thì Stremio coi đây là addon khác, mọi người đã
   // cài phải gỡ ra cài lại. Tên hiển thị đổi được tự do, id thì không nên.
   id: 'community.vn.kkphim.hh3d',
-  version: '1.0.0',
+  // Stremio so SỐ PHIÊN BẢN để biết có cần nạp lại manifest hay không. Thêm
+  // resource mà quên tăng số này thì bản đã cài vẫn giữ manifest cũ: addon khai
+  // 'subtitles' mà Stremio không bao giờ hỏi xin phụ đề. Thêm/bớt resource là
+  // phải tăng.
+  version: '1.1.0',
   name: 'WiSFilm',
   description:
     'Gộp nhiều nguồn phim trong nước, khớp đúng số tập với danh sách chính thức trên Stremio (Cinemeta/Kitsu). Hỗ trợ đánh số theo phần và đánh số tuyệt đối.',
