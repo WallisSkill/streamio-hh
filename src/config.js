@@ -90,6 +90,14 @@ export const CONFIG = {
   // which also switches Nguồn C back to external links, because its segments
   // answer 403 to any request carrying no Referer and Stremio sends none.
   stremioProxy: (env.STREMIO_PROXY ?? 'http://127.0.0.1:11470').replace(/\/+$/, ''),
+  // Tự tìm phụ đề tiếng Việt khi phim chưa được ghim tay. Tắt bằng
+  // SUBTITLE_SEARCH=0 nếu chỉ muốn dùng bản ghim.
+  subtitleSearch: bool(env.SUBTITLE_SEARCH, true),
+  // Lấy tối đa bấy nhiêu bản cho mỗi phim — nhiều quá thì danh sách rối mà
+  // chẳng ai xem tới bản thứ sáu.
+  subtitleLimit: Number(env.SUBTITLE_LIMIT || 5),
+  // Cửa phụ đề cũ nhận diện client qua UA; để trống là bị từ chối.
+  subtitleUserAgent: env.SUBTITLE_UA || 'VLSub 0.10.2',
   cacheTtl: Number(env.CACHE_TTL || 1800) * 1000,
   cinemeta: 'https://v3-cinemeta.strem.io',
   kitsuApi: 'https://kitsu.io/api/edge',

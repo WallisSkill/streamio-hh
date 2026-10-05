@@ -8,6 +8,7 @@ import { playlistFor as hh3dPlaylist } from './lib/hh3dPlayer.js';
 import { hh3dBase, isHh3dPage } from './lib/hh3dBase.js';
 import { routesTo } from './sources/nguonc.js';
 import { pinsFor } from './lib/subtitlePins.js';
+import { vietnameseSubtitles, downloadAllowed, fetchSubtitle } from './lib/subtitleSearch.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
 
@@ -217,6 +218,36 @@ export async function handleRequest(req, res) {
     }
 
     /**
+     * /sub.srt?u=<link>&enc=<bảng mã> — tải hộ một phụ đề.
+     *
+     * Phải đi qua đây chứ không giao thẳng link cho Stremio, vì hai lẽ: file tải
+     * về là `.gz` nên người chơi đọc không ra, và bảng mã thường không phải UTF-8
+     * — bỏ bước đổi bảng mã thì phụ đề tiếng Việt ra đầy dấu hỏi.
+     *
+     * Chỉ nhận link của chính nơi đã tìm ra nó, để đây không thành proxy mở.
+     */
+    if (path === '/sub.srt') {
+      const u = url?.searchParams?.get('u') || '';
+      const enc = url?.searchParams?.get('enc') || 'UTF-8';
+      if (!downloadAllowed(u)) return send(res, 400, { err: 'link phụ đề không hợp lệ', url: u || null });
+
+      let text;
+      try {
+        text = await fetchSubtitle(u, enc);
+      } catch (err) {
+        return send(res, 502, { err: err.message, url: u });
+      }
+      if (!text) return send(res, 502, { err: 'không tải được phụ đề', url: u });
+
+      res.writeHead(200, {
+        ...CORS,
+        'content-type': 'application/x-subrip; charset=utf-8',
+        // Phụ đề không đổi nội dung, nên cache dài ở biên.
+        'cache-control': 'public, max-age=86400, s-maxage=604800',
+      });
+      return res.end(text);
+    }
+    /**
      * /subtitles/:type/:id/:extra.json — phụ đề cho phim đang xem.
      *
      * Stremio hỏi MỌI addon có khai `subtitles` theo id của phim, không quan tâm
@@ -235,12 +266,25 @@ export async function handleRequest(req, res) {
       const extra = new URLSearchParams(cut === -1 ? '' : rest.slice(cut + 1));
       const filename = extra.get('filename') || '';
 
+      // Bản ghim tay trước: đó là bản bạn đã chọn, không cần đoán gì.
       const subtitles = pinsFor(id, filename).map((s, i) => ({
-        id: `wisfilm-${i}`,
+        id: `pin-${i}`,
         url: s.url,
         lang: s.lang || 'vie',
         ...(s.label ? { label: s.label } : {}),
       }));
+
+      // Rồi mới tới bản tự tìm, và chỉ tiếng Việt. Mỗi bản đi qua /sub.srt vì
+      // nguồn giao file .gz với bảng mã không phải UTF-8.
+      const base = baseUrlOf(req);
+      for (const s of await vietnameseSubtitles(id, filename)) {
+        subtitles.push({
+          id: `os-${s.id}`,
+          url: `${base}/sub.srt?u=${encodeURIComponent(s.url)}&enc=${encodeURIComponent(s.encoding)}`,
+          lang: 'vie',
+          label: `${s.release} · ${s.downloads.toLocaleString('vi-VN')} lượt tải`,
+        });
+      }
 
       return send(res, 200, { subtitles, cacheMaxAge: 1800 }, { edge: true });
     }
