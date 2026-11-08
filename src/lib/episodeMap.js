@@ -65,7 +65,11 @@ export function decideMapping({ entry, season, episode, index }) {
   }
 
   // 2) Single-season show, or season 1 -> relative and absolute coincide.
-  if (season === 1 && (totalAbsolute === null || seasonCount === totalAbsolute)) {
+  //    `!totalAbsolute` tính cả trường hợp KHÔNG CÓ danh sách tập: phim mới mà
+  //    Cinemeta chưa có, tên lấy từ IMDb nên không kèm tập. Ở phần 1 thì số
+  //    tương đối trùng số tuyệt đối, nên đây là kết luận chắc chứ không phải
+  //    đoán — thiếu dòng này thì mọi phim như vậy đều bị gắn cờ "không chắc".
+  if (season === 1 && (!totalAbsolute || seasonCount === totalAbsolute)) {
     return { mode: 'season-relative', target: episode, confidence: 'high', firm: true, note: 'Phim 1 phần' };
   }
 

@@ -7,10 +7,36 @@ import { cached, cacheGet, cacheSet } from './cache.js';
  * This is the source of truth for what the user sees in the Stremio UI,
  * so every episode mapping is computed against THIS numbering.
  */
+/**
+ * Tên phim từ mã IMDb, dùng khi Cinemeta chưa có.
+ *
+ * Cửa gợi ý của IMDb trả về tên và năm chỉ từ mã, không cần key. Đây là đường
+ * lui chứ không phải đường chính: nó KHÔNG có danh sách tập, nên phim nhiều
+ * phần sẽ thiếu số tập tuyệt đối — đủ để tìm ra phim, không đủ để khớp tập cho
+ * nguồn gộp.
+ */
+async function titleFromImdb(imdbId) {
+  const url = `https://v2.sg.media-imdb.com/suggestion/t/${imdbId}.json`;
+  const data = await safe(getJson(url), 'imdb-suggest');
+  const hit = (data?.d || []).find((d) => d?.id === imdbId && d?.l);
+  if (!hit) return null;
+  return { name: hit.l, year: hit.y ? String(hit.y) : null, videos: [] };
+}
+
+/**
+ * Metadata chính thức của phim.
+ *
+ * Cinemeta trả 200 kèm `{}` cho phim nó CHƯA có — thường là phim mới hoặc phim
+ * châu Á vừa lên sóng. Trước đây gặp vậy là addon dừng luôn: không có tên thì
+ * không đi tìm được, nên nguồn trong nước có phim mà Stremio vẫn trống trơn
+ * (đo 08/11/2026 với tt36982492 "Sunshine Through the Rain", nguonc có đủ tập).
+ * Nên khi Cinemeta rỗng thì lấy tên từ IMDb rồi đi tiếp.
+ */
 export async function getCinemeta(type, imdbId) {
   const url = `${CONFIG.cinemeta}/meta/${type}/${imdbId}.json`;
-  const data = await getJson(url);
-  return data?.meta || null;
+  const data = await safe(getJson(url), 'cinemeta');
+  if (data?.meta?.name) return data.meta;
+  return titleFromImdb(imdbId);
 }
 
 /**
