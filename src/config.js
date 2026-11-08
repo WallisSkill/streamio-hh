@@ -98,6 +98,11 @@ export const CONFIG = {
   subtitleLimit: Number(env.SUBTITLE_LIMIT || 5),
   // Cửa phụ đề cũ nhận diện client qua UA; để trống là bị từ chối.
   subtitleUserAgent: env.SUBTITLE_UA || 'VLSub 0.10.2',
+  // Segment Nguồn C đi đường nào: 'addon' là qua chính addon (trình phát nào
+  // cũng xem được, tốn băng thông của addon), 'stremio' là qua server nội bộ
+  // của Stremio (nhẹ hơn nhưng CHỈ chạy trong Stremio — trình phát khác báo
+  // "unrecognized file format").
+  nguoncSegmentMode: (env.NGUONC_SEGMENT_MODE || 'addon').toLowerCase(),
   cacheTtl: Number(env.CACHE_TTL || 1800) * 1000,
   cinemeta: 'https://v3-cinemeta.strem.io',
   kitsuApi: 'https://kitsu.io/api/edge',

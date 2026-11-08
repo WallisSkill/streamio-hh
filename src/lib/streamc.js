@@ -120,13 +120,20 @@ const absolute = (line, base) => {
  * arrives with the Referer its host demands. Comments pass through untouched,
  * except `#EXT-X-KEY`, whose URI is a fetch like any other.
  */
-function rewrite(text, playlistUrl, referer) {
+function rewrite(text, playlistUrl, referer, { segmentBase, embed } = {}) {
+  const urls = [];
   const proxy = (raw) => {
     const url = absolute(raw, playlistUrl);
-    return url ? viaStremioProxy(url, { Referer: referer }) : raw;
+    if (!url) return raw;
+    const at = urls.push(url) - 1;
+    // Qua addon: ai cũng phát được. Qua server nội bộ Stremio: nhẹ cho addon
+    // nhưng chỉ chạy trong Stremio.
+    return segmentBase
+      ? `${segmentBase}?u=${encodeURIComponent(embed)}&i=${at}`
+      : viaStremioProxy(url, { Referer: referer });
   };
 
-  return text
+  const body = text
     .split(/\r?\n/)
     .map((line) => {
       const s = line.trim();
@@ -139,6 +146,8 @@ function rewrite(text, playlistUrl, referer) {
       return proxy(s);
     })
     .join('\n');
+
+  return { body, urls };
 }
 
 /**
@@ -148,7 +157,7 @@ function rewrite(text, playlistUrl, referer) {
  * which nothing here does — the 'hls' format serves a flat media playlist, and
  * anything else is reported as unsupported rather than served half-working.
  */
-export async function playlistFor(embed) {
+export async function playlistFor(embed, { segmentBase = null } = {}) {
   const issued = await issuePlaylist(embed);
   if (!issued) return null;
 
@@ -163,7 +172,8 @@ export async function playlistFor(embed) {
   if (!/^#EXTM3U/.test(text.trim())) throw new Error('streamc playlist: không phải m3u8');
   if (/#EXT-X-STREAM-INF/.test(text)) return null;
 
-  return { body: rewrite(text, issued.playlist, referer), via: 'grant', issued };
+  const built = rewrite(text, issued.playlist, referer, { segmentBase, embed });
+  return { body: built.body, urls: built.urls, referer, via: 'grant', issued };
 }
 
 /**
@@ -398,20 +408,20 @@ async function segmentSeconds(host, hash, i, referer) {
  * máy nhà và trên mọi host Cloudflare không chặn. Thất bại thì dựng lại từ CDN,
  * đường duy nhất còn sống trên Workers.
  */
-export async function playlistOf(embed) {
+export async function playlistOf(embed, opts = {}) {
   try {
-    const real = await playlistFor(embed);
+    const real = await playlistFor(embed, opts);
     if (real) return real;
   } catch {
     // Không cần biết vì sao: bước sau không phụ thuộc bước này.
   }
-  return playlistFromCdn(embed);
+  return playlistFromCdn(embed, opts);
 }
 
 /** Playlist dựng từ CDN cho một embed, hoặc null nếu không tìm ra video. */
-export async function playlistFromCdn(embed) {
+export async function playlistFromCdn(embed, { segmentBase = null } = {}) {
   return cached(
-    `streamc:cdn:${embed}`,
+    `streamc:cdn:${segmentBase ? 'addon' : 'stremio'}:${embed}`,
     async () => {
       const hash = new URL(embed).searchParams.get('hash');
       if (!hash) return null;
@@ -442,15 +452,23 @@ export async function playlistFromCdn(embed) {
         `#EXT-X-TARGETDURATION:${target}`,
         '#EXT-X-MEDIA-SEQUENCE:0',
       ];
+      const urls = [];
       for (let i = 0; i < count; i++) {
         const seconds = i === count - 1 && last ? last : each;
+        urls.push(segmentUrl(host, hash, i));
         lines.push(`#EXTINF:${seconds.toFixed(6)},`);
-        lines.push(viaStremioProxy(segmentUrl(host, hash, i), { Referer: referer }));
+        lines.push(
+          segmentBase
+            ? `${segmentBase}?u=${encodeURIComponent(embed)}&i=${i}`
+            : viaStremioProxy(segmentUrl(host, hash, i), { Referer: referer }),
+        );
       }
       lines.push('#EXT-X-ENDLIST');
 
       return {
         body: lines.join('\n'),
+        urls,
+        referer,
         via: 'cdn',
         host,
         count,

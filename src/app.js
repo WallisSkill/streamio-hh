@@ -334,7 +334,9 @@ export async function handleRequest(req, res) {
       }
       let playlist;
       try {
-        playlist = await playlistOf(u);
+        playlist = await playlistOf(u, {
+          segmentBase: CONFIG.nguoncSegmentMode === 'stremio' ? null : `${baseUrlOf(req)}/nguonc-seg`,
+        });
       } catch (err) {
         return send(res, 502, { err: err.message, embed: u });
       }
@@ -350,6 +352,65 @@ export async function handleRequest(req, res) {
       return res.end(playlist.body);
     }
 
+    /**
+     * /nguonc-seg?u=<trang embed>&i=<số thứ tự> — một segment Nguồn C.
+     *
+     * Vì sao phải có: segment của họ trả 403 cho request không có Referer, mà
+     * trình phát thì không gửi Referer. Trước đây addon đẩy việc đó sang server
+     * nội bộ của Stremio (127.0.0.1:11470) — gọn, không tốn băng thông, nhưng
+     * CHỈ chạy trong Stremio. Mở cùng link đó bằng trình phát khác thì không tải
+     * nổi đoạn nào và báo "unrecognized file format" (đo 08/11/2026 trên app
+     * WiS TV). Đi qua đây thì ai phát cũng được.
+     *
+     * Nhận trang embed kèm số thứ tự chứ không nhận URL segment: địa chỉ đi ra
+     * luôn do chính addon dựng lại từ playlist, nên đây không phải proxy mở và
+     * không cần danh sách host — mà host CDN của họ thì đổi luôn.
+     */
+    if (path === '/nguonc-seg') {
+      const u = url?.searchParams?.get('u') || '';
+      const index = Number(url?.searchParams?.get('i'));
+      if (!isStreamc(u) || !embedFetchable(u) || !Number.isInteger(index) || index < 0) {
+        return send(res, 400, { err: 'cần ?u=<embed streamc>&i=<số thứ tự>', embed: u || null });
+      }
+
+      const playlist = await playlistOf(u, { segmentBase: `${baseUrlOf(req)}/nguonc-seg` }).catch(() => null);
+      const target = playlist?.urls?.[index];
+      if (!target) return send(res, 502, { err: 'không dựng lại được segment này', embed: u, index });
+
+      const asked = req.headers.range || '';
+      const m = /^bytes=(\d*)-(\d*)$/.exec(asked.trim());
+
+      try {
+        const hit = await fetch(target, {
+          headers: {
+            'user-agent': CONFIG.userAgent,
+            referer: playlist.referer || `${new URL(u).origin}/`,
+            ...(m ? { range: asked } : {}),
+          },
+          signal: AbortSignal.timeout(CONFIG.httpTimeout),
+        });
+        if (!hit.ok && hit.status !== 206) {
+          return send(res, 502, { err: `segment trả HTTP ${hit.status}`, segment: target });
+        }
+
+        const headers = {
+          ...CORS,
+          'content-type': 'video/mp2t',
+          'accept-ranges': 'bytes',
+          // Segment là bất biến: cache dài, để biên Cloudflare trả cho lần sau.
+          'cache-control': 'public, max-age=86400, s-maxage=604800, immutable',
+        };
+        for (const name of ['content-length', 'content-range']) {
+          const v = hit.headers.get(name);
+          if (v) headers[name] = v;
+        }
+        res.writeHead(hit.status === 206 ? 206 : 200, headers);
+        // Workers truyền được stream nên byte chảy qua; node:http thì phải đệm.
+        return res.end(CONFIG.onWorkers ? hit.body : Buffer.from(await hit.arrayBuffer()));
+      } catch (err) {
+        return send(res, 502, { err: err.message, segment: target });
+      }
+    }
     // /probe/embed?u=<embed url> — why a given embed can or cannot be played
     // inside Stremio: what the query string carries, what the page declares,
     // and whether the track that comes out is a manifest Stremio can read.
