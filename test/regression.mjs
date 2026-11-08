@@ -20,11 +20,14 @@ const CASES = [
   { id: 'series/tt0388629:21:1', want: { mode: 'absolute', target: 891 }, why: 'One Piece S21E1 = tập 891' },
   { id: 'movie/tt37141816', want: { mode: 'movie' }, why: 'Phim lẻ khớp bằng IMDb id' },
   {
-    id: 'series/tt17050076:4:56',
+    // Cinemeta đã gộp bộ này về MỘT phần 250 tập (trước là S4E56), nên case phải
+    // hỏi theo cách Stremio đang hỏi — hỏi theo cách cũ thì fail vì Cinemeta
+    // không còn phần 4, chứ không phải vì khớp tập sai.
+    id: 'series/tt17050076:1:141',
     source: 'nguonc',
-    want: { mode: 'absolute', target: 141 },
+    want: { mode: 'season-relative', target: 141 },
     wantStream: 'Nguồn C',
-    why: 'Thôn Phệ Tinh Không: bỏ mục 26 tập, rơi xuống mục gộp 212 tập',
+    why: 'Thôn Phệ Tinh Không: bỏ mục 26 tập, rơi xuống mục gộp -> tập 141',
   },
   {
     id: 'series/tt28022382:1:1',
@@ -34,26 +37,35 @@ const CASES = [
     why: 'Soul Land 2: phụ đề lệch (Clan/Sect) -> khớp phần trước dấu hai chấm',
   },
   {
-    // Ca này hết giá trị khi tập 244 lên sóng — lúc đó nó phải CÓ stream.
-    id: 'series/tt17050076:5:36',
+    // Ca này hết giá trị khi tập 250 lên sóng — lúc đó nó phải CÓ stream.
+    id: 'series/tt17050076:1:250',
     source: 'nguonc',
     wantNoStream: true,
     want: {},
-    why: 'S5E36 = tập 244, nguồn mới có 243: chưa ra thì không được đoán sang tập 36',
+    why: 'Tập 250 chưa ra: không nguồn nào được đoán sang tập khác',
   },
   {
-    id: 'series/tt17050076:5:1',
+    id: 'series/tt17050076:1:209',
     source: 'nguonc',
     wantStream: 'Nguồn C',
-    want: { mode: 'absolute', target: 209 },
-    why: 'S5E1: bỏ mục 26 tập (đoán "tập 1") để rơi xuống mục gộp -> tập 209',
+    want: { mode: 'season-relative', target: 209 },
+    why: 'Tập 209 (xưa là S5E1): bỏ mục 26 tập để rơi xuống mục gộp',
   },
   {
     id: 'series/tt27432264:0:1',
-    source: 'hh3d',
-    wantStream: 'KKPhim',
+    source: 'nguonc',
+    wantStream: 'Nguồn C',
+    wantPicked: 'tien-nghich-movie-than-lam-chi-chien',
     want: { mode: 'special' },
-    why: 'Tiên Nghịch S0E1: tập đặc biệt chỉ nhận mục phim lẻ, không ép vào tập 1 phim chính',
+    why: 'Tiên Nghịch S0E1 = "The Battle of the Gods", không được ra ngoại truyện khác',
+  },
+  {
+    id: 'series/tt17050076:0:2',
+    source: 'nguonc',
+    wantStream: 'Nguồn C',
+    wantPicked: 'thon-phe-tinh-khong-movie-quyet-chien-nguyen-thuy-tinh',
+    want: { mode: 'special' },
+    why: 'Phần 0 phải khớp ĐÚNG tên tập đặc biệt, hai ngoại truyện không được đổi chỗ',
   },
 ];
 
@@ -72,7 +84,10 @@ for (const c of CASES) {
     : c.wantStream
       ? (json.streams || []).some((s) => String(s.name || '').includes(c.wantStream))
       : (json.streams || []).length > 0;
-  const ok = okMode && okTarget && okStream;
+  // Phần 0 có nhiều ngoại truyện cùng tên bộ, nên chỉ xem "có stream" là chưa
+  // đủ: phải đúng MỤC nào, không thì một ngoại truyện khác vẫn tính PASS.
+  const okPicked = !c.wantPicked || json.debug?.sources?.[src]?.picked?.slug === c.wantPicked;
+  const ok = okMode && okTarget && okStream && okPicked;
   if (ok) pass++;
   console.log(
     `${ok ? 'PASS' : 'FAIL'}  ${c.id.padEnd(26)} ${src.padEnd(6)} ${d.mode || '-'} -> tập ${d.target ?? '-'}  (${json.streams?.length || 0} stream)  ${c.why}`,
@@ -80,7 +95,7 @@ for (const c of CASES) {
   if (!ok) {
     console.log(
       `      mong đợi ${c.want.mode || 'bất kỳ'} tập ${c.want.target ?? '-'}` +
-        `${c.wantStream ? ` + stream "${c.wantStream}"` : ''}; picked=${json.debug?.sources?.[src]?.picked?.slug}`,
+        `${c.wantStream ? ` + stream "${c.wantStream}"` : ''}${c.wantPicked ? ` + mục "${c.wantPicked}"` : ''}; picked=${json.debug?.sources?.[src]?.picked?.slug}`,
     );
   }
 }

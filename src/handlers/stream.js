@@ -5,7 +5,7 @@ import nguonc from '../sources/nguonc.js';
 import * as hh3d from '../sources/hh3d.js';
 import { getCinemeta, buildEpisodeIndex, getAliases, getKitsuMeta } from '../lib/meta.js';
 import { filterCandidates } from '../lib/match.js';
-import { resolveEpisode } from '../lib/episodeMap.js';
+import { resolveEpisode, keywords, matchesKeyword } from '../lib/episodeMap.js';
 import { baseTitle, titleHead } from '../lib/text.js';
 import { getOverride } from '../lib/overrides.js';
 import { unwrapEmbed, embedFetchable } from '../lib/embed.js';
@@ -209,10 +209,62 @@ async function shortlistFor(source, target, parsed, wantType, limit = 3) {
   if (pin) return [{ candidate: { slug: pin }, via: 'override' }];
 
   const candidates = await gatherFrom(source, target, parsed.season);
-  const scored = filterCandidates(candidates, target, wantType);
-  const best = pickEntry(scored, parsed.season);
+
+  // Tập đặc biệt (phần 0) là PHIM LẺ: nguồn trong nước để chúng thành mục riêng
+  // và gắn loại "phim lẻ", nên lọc theo đúng loại đang hỏi sẽ vứt sạch chúng
+  // trước khi kịp xét — đó là lý do S0E1 của Thôn Phệ Tinh Không ra rỗng dù
+  // Nguồn C có đủ hai ngoại truyện. Phần 0 nhận cả hai loại, rồi để bước khớp
+  // tên tập đặc biệt chọn đúng cái.
+  const special = Number(parsed.season) === 0;
+  const scored = special
+    ? [...filterCandidates(candidates, target, 'movie'), ...filterCandidates(candidates, target, 'series')].sort(
+        (a, b) => b.score - a.score,
+      )
+    : filterCandidates(candidates, target, wantType);
+
+  // Phần 0: xếp theo TÊN TẬP ĐẶC BIỆT, và xếp tương đối giữa các mục chứ không
+  // xét từng mục riêng. Xét riêng thì "trúng một từ là nhận", và "Trận Chiến Tru
+  // Tiên" trúng chữ "battle" liền chiếm chỗ của "The Battle of the Gods". So với
+  // nhau thì mục trùng nhiều từ hơn thắng, và mục không trùng từ nào bị loại khi
+  // đã có mục trùng.
+  const want = special ? target.index?.specialTitle?.(parsed.episode) || '' : '';
+  let pool = scored;
+  if (want) {
+    const words = keywords(want);
+    const hits = (c) => {
+      const have = keywords(`${c.name || ''} ${c.originName || ''}`);
+      return words.filter((w) => matchesKeyword(w, have)).length;
+    };
+
+    // Ngoại truyện thường mang tên khác hẳn tên bộ ("Swallowed Star Movie:
+    // Showdown on Primeval Star"), nên nó KHÔNG qua nổi ngưỡng điểm vốn tính
+    // theo độ giống tên bộ — đo được 22 điểm trên ngưỡng 45. Với tập đặc biệt
+    // thì chính tên tập mới là bằng chứng, nên ứng viên trùng tên tập được tự
+    // mở đường vào danh sách thay vì bị loại từ vòng chấm điểm.
+    const byName = candidates
+      .filter((c) => hits(c) > 0)
+      .map((c) => ({ candidate: c, score: 50 + hits(c) * 10, reasons: ['special-title'] }));
+
+    const seen = new Set();
+    const merged = [...byName, ...scored].filter((c) => {
+      const key = `${c.candidate.source}:${c.candidate.slug}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const ranked = merged
+      .map((c) => ({ c, n: hits(c.candidate) }))
+      .sort((a, b) => b.n - a.n || b.c.score - a.c.score);
+    pool = ranked[0]?.n > 0 ? ranked.filter((r) => r.n > 0).map((r) => r.c) : scored;
+  }
+
+  const best = want ? pool[0] : pickEntry(pool, parsed.season);
   if (!best) return [];
-  return [best, ...scored.filter((s) => s !== best)].slice(0, limit);
+  // Một bộ thường có vài ngoại truyện; phần 0 cho thử rộng hơn để còn rơi xuống
+  // đúng mục khi mục đầu không phát được.
+  const take = special ? Math.max(limit, 6) : limit;
+  return [best, ...pool.filter((s) => s !== best)].slice(0, take);
 }
 
 /**

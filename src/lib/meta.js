@@ -45,6 +45,16 @@ export async function getCinemeta(type, imdbId) {
  *  - seasonCounts[s] = number of episodes Stremio shows in season s
  */
 export function buildEpisodeIndex(meta) {
+  // Phần 0 là tập đặc biệt (ngoại truyện, movie). Chúng KHÔNG nằm trong dãy số
+  // tập thường, nhưng tên của chúng là thứ duy nhất phân biệt được "Đại Lục
+  // Huyết Lạc" với "Quyết Chiến Nguyên Thuỷ Tinh" ở nguồn trong nước — nên giữ
+  // lại để lúc khớp còn có cái mà đối chiếu.
+  const specials = new Map(
+    (meta?.videos || [])
+      .filter((v) => Number(v.season) === 0 && Number.isFinite(Number(v.number)))
+      .map((v) => [Number(v.number), v.name || v.title || '']),
+  );
+
   const videos = (meta?.videos || [])
     .filter((v) => Number(v.season) > 0 && Number.isFinite(Number(v.number)))
     .map((v) => ({ season: Number(v.season), number: Number(v.number), released: v.released || v.firstAired }))
@@ -64,6 +74,10 @@ export function buildEpisodeIndex(meta) {
     seasons,
     seasonCounts,
     totalAbsolute: videos.length,
+    /** tên tập đặc biệt S0E<n>, hoặc null */
+    specialTitle(episode) {
+      return specials.get(Number(episode)) || null;
+    },
     /** absolute episode number across the whole show, or null if unknown */
     absolute(season, episode) {
       return absOf.get(`${season}:${episode}`) ?? null;

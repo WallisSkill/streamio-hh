@@ -112,6 +112,36 @@ export function decideMapping({ entry, season, episode, index }) {
   };
 }
 
+/**
+ * Mấy từ đủ đặc trưng để nhận ra một tên, bỏ dấu và bỏ từ chung.
+ *
+ * Bỏ cả tên bộ ("swallowed", "star"…) thì không cần: từ chung xuất hiện ở MỌI
+ * mục nên không phân biệt được gì; cái phân biệt là những từ chỉ có ở một tập
+ * đặc biệt, như "blood" hay "showdown".
+ */
+const STOP = new Set(['the', 'and', 'movie', 'star', 'part', 'special', 'ova', 'phim', 'tap']);
+export function keywords(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((w) => w.length >= 3 && !STOP.has(w));
+}
+
+/**
+ * Một từ khoá có mặt trong danh sách từ của mục không.
+ *
+ * So theo tiền tố chứ không so bằng nhau, vì hai bên viết khác số nhiều: Cinemeta
+ * ghi "The Battle of the Gods" còn nguồn ghi "Battle of God Arrival". Chỉ khớp
+ * đúng chữ thì "gods" trượt "god", hai mục cùng được đúng một điểm "battle", và
+ * mục sai thắng nhờ điểm phụ — đã thấy đúng cảnh đó.
+ */
+export function matchesKeyword(word, have) {
+  return have.some((h) => h === word || (h.length >= 3 && word.startsWith(h)) || (word.length >= 3 && h.startsWith(word)));
+}
+
 /** Pick the concrete episode object, retrying with the alternate convention. */
 export function resolveEpisode({ entry, server, season, episode, index }) {
   const decision = decideMapping({ entry, season, episode, index });
@@ -121,13 +151,47 @@ export function resolveEpisode({ entry, server, season, episode, index }) {
   const pick = (n) => pool.find((e) => e.num === n) || null;
   // Mục chỉ có một file ("Full") — tức là một phim lẻ, không phải bộ.
   const single = pool.length === 1 && pool[0].isFull ? pool[0] : null;
+  // Với tập đặc biệt thì một mục CHỈ CÓ MỘT TẬP chính là tập đó, bất kể nguồn
+  // ghi nhãn "Full" hay "Tập 1" — Nguồn C ghi nhãn kiểu sau, nên đòi "Full" là
+  // loại luôn mục đúng. Chỉ dùng khi không biết tên tập đặc biệt để đối chiếu.
+  const onlyEpisode = pool.length === 1 ? pool[0] : null;
 
   // Tập đặc biệt: chỉ mục phim lẻ mới đúng. Mục là cả bộ thì bỏ, đừng gán bừa.
+  //
+  // Và phải đúng CÁI phim lẻ được hỏi: một bộ thường có vài ngoại truyện, nguồn
+  // trong nước để chúng thành mấy mục riêng, nên "mục nào là phim lẻ cũng được"
+  // sẽ gán Đại Lục Huyết Lạc vào chỗ Quyết Chiến Nguyên Thuỷ Tinh. Cinemeta có
+  // tên từng tập đặc biệt; đối chiếu bằng mấy từ đặc trưng trong tên đó — tên
+  // tiếng Việt khác hẳn nhưng tên gốc ở nguồn thì vẫn giữ lại ("Blood Luo
+  // Continent" ↔ "Swallowed Star: Blood Land"). Không khớp thì trả rỗng để người
+  // gọi rơi xuống mục kế tiếp.
   if (decision.mode === 'special') {
-    if (!single) return { decision, episode: null };
+    const want = index?.specialTitle?.(episode) || '';
+
+    // Ngoại truyện dài vài phút tới vài tập, không bao giờ là cả bộ. Chặn trên
+    // để một mục 200 tập không lọt vào chỗ tập đặc biệt chỉ vì tên có chữ trùng.
+    const short = pool.length > 0 && pool.length <= 5;
+
+    if (want) {
+      const have = keywords(`${entry.name || ''} ${entry.originName || ''}`);
+      const hit = keywords(want).find((w) => matchesKeyword(w, have));
+      if (!hit) return { decision: { ...decision, note: `Phim lẻ này không phải "${want}"` }, episode: null };
+      if (!short) return { decision: { ...decision, note: `Mục quá dài để là "${want}"` }, episode: null };
+
+      // Lấy phần đầu chứ không đòi mục chỉ có MỘT tập: Nguồn C cắt "Thần Lâm
+      // Chi Chiến" thành ba phần, và đòi một tập là loại đúng mục cần rồi rơi
+      // xuống "Trận Chiến Tru Tiên" — một ngoại truyện khác hẳn.
+      return {
+        decision: { ...decision, confidence: 'high', note: `Phim lẻ — khớp "${want}"` },
+        episode: pool[0],
+      };
+    }
+
+    // Không biết tên tập đặc biệt thì chỉ dám nhận mục đúng một tập.
+    if (!onlyEpisode) return { decision, episode: null };
     return {
       decision: { ...decision, confidence: 'high', note: 'Phim lẻ — khớp tập đặc biệt' },
-      episode: single,
+      episode: onlyEpisode,
     };
   }
 
@@ -140,9 +204,14 @@ export function resolveEpisode({ entry, server, season, episode, index }) {
   // trong khi mục gộp 217 tập ngay sau đó trả đúng tập 209.
   if (found && decision.guess && Number(season) > 1) found = null;
 
-  // Một mục phim lẻ chỉ trả lời đúng cho tập 1; hỏi tập 36 mà đưa phim lẻ ra là
-  // đưa nhầm phim.
-  if (!found && single && Number(episode) === 1) found = single;
+  // Mục chỉ có một file "Full" là một PHIM LẺ, không phải tập của bộ. Trước đây
+  // nó được phép trả lời cho tập 1 của bất cứ bộ nào, và thế là "Thôn Phệ Tinh
+  // Không Movie: Quyết Chiến Nguyên Thuỷ Tinh" — một phim ngoại truyện riêng —
+  // bị đem ra thế chỗ tập 1 của bộ 250 tập. Giờ chỉ nhận khi phim ĐÚNG LÀ một
+  // tập duy nhất: không có danh sách tập, hoặc danh sách chỉ có một tập. Bộ dài
+  // mà không thấy tập cần thì trả rỗng, để người gọi rơi xuống mục kế tiếp.
+  const oneShot = !(index?.totalAbsolute > 1);
+  if (!found && single && oneShot && Number(episode) === 1) found = single;
 
   // Chỉ đổi cách đánh số khi CHƯA chắc nguồn đánh số kiểu gì. Chắc rồi mà không
   // thấy tập thì là tập chưa ra — trả về rỗng, để người xem khỏi bấm nhầm tập.
