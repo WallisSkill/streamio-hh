@@ -160,10 +160,11 @@ export async function subsourceSubtitles(id, filename = '', settings = {}) {
       const judged = releaseScore(filename, names);
       return {
         id: String(raw.subtitleId),
-        release: names.filter(Boolean).join(', ') || 'phụ đề',
+        release: names[0] || 'phụ đề',
+        moreReleases: Math.max(0, names.length - 1),
         hearingImpaired: Boolean(raw.hearingImpaired),
         contributors: contributorsOf(raw),
-        commentary: oneLine(raw.commentary),
+        commentary: oneLine(decodeEntities(raw.commentary)),
         uploaderId: raw.uploaderId ?? null,
         rating: raw.rating?.total ? { good: Number(raw.rating.good) || 0, total: Number(raw.rating.total) } : null,
         score: judged.score,
@@ -188,11 +189,11 @@ export async function subsourceSubtitles(id, filename = '', settings = {}) {
  * phải mở SubSource ra xem.
  */
 export function subsourceLabel(s) {
-  const parts = ['WisFilm-SubSource', s.release];
+  const parts = ['WisFilm-SubSource', s.moreReleases ? `${s.release} +${s.moreReleases} bản` : s.release];
   if (s.hearingImpaired) parts.push('CC');
   const up = s.uploader;
   if (up?.name) {
-    const tag = up.verified ? ' (đã xác minh)' : up.badges?.length ? ` (${up.badges.join(', ')})` : '';
+    const tag = up.badges?.length ? ` (${up.badges.join(', ')})` : '';
     parts.push(`Đăng: ${up.name}${tag}`);
   }
   const others = (s.contributors || []).filter((c) => c !== up?.name);
@@ -215,28 +216,50 @@ function contributorsOf(raw) {
 }
 
 /**
- * Tên chữ của một huy hiệu. Tài liệu chỉ ghi `badges: []`, không nói phần tử
- * trông thế nào, nên nhận cả chuỗi lẫn object có tên/nhãn.
+ * Huy hiệu API trả về dạng mã (`tr1`, `up2`...). Nghĩa của từng mã lấy từ bảng
+ * huy hiệu trong chính trang subsource.net (đọc 09/11/2026). Chỉ giữ huy hiệu
+ * nói lên tay nghề dịch/đăng; huy hiệu ủng hộ tiền hay VIP không giúp chọn phụ
+ * đề nên không đưa vào nhãn, và mã lạ thì bỏ chứ không in mã thô ra.
  */
-function badgeName(b) {
-  if (typeof b === 'string') return b.trim();
-  return String(b?.name || b?.title || b?.label || b?.type || '').trim();
+const BADGES = {
+  tr1: 'dịch giả đã xác minh',
+  tr2: 'dịch giả kỳ cựu',
+  tr3: 'dịch giả lão làng',
+  up1: 'người đăng đã xác minh',
+  up2: 'người đăng chăm chỉ',
+  up3: 'người đăng huyền thoại',
+  admin: 'quản trị viên',
+};
+
+function badgeCode(b) {
+  return String((typeof b === 'string' ? b : b?.code || b?.name || b?.title || b?.label || b?.type || b?.id) || '').trim().toLowerCase();
+}
+
+/** `&#244;` -> `ô`: lời bình của SubSource về tới đây còn ở dạng thực thể HTML. */
+const NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+function decodeEntities(text) {
+  return String(text || '').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+    if (e[0] === '#') {
+      const code = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+    }
+    return NAMED[e.toLowerCase()] ?? m;
+  });
 }
 
 const USER_TTL = 24 * 60 * 60 * 1000;
 
-/** { name, badges, verified } của người đăng, hoặc null khi không hỏi được. */
+/** { name, badges } của người đăng, hoặc null khi không hỏi được. */
 async function uploaderOf(userId, key) {
   try {
     return await cached(`subsource:user:${userId}`, async () => {
       const data = await api(`/users/${encodeURIComponent(userId)}`, {}, key);
       const u = data?.data;
       if (!u) return null;
-      const badges = [].concat(u.badges || []).map(badgeName).filter(Boolean);
+      const codes = [].concat(u.badges || []).map(badgeCode);
       return {
         name: String(u.displayname || u.username || '').trim(),
-        badges,
-        verified: badges.some((b) => /verif|trusted/i.test(b)),
+        badges: codes.map((c) => BADGES[c]).filter(Boolean),
       };
     }, USER_TTL);
   } catch {

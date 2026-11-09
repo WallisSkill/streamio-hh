@@ -6,7 +6,7 @@ process.env.ENABLE_SUBSOURCE = '1';
 
 const calls = [];
 const USERS = {
-  7: { userId: 7, displayname: 'bobbyocean', badges: [{ name: 'Verified' }] },
+  7: { userId: 7, displayname: 'bobbyocean', badges: ['tr1', 'do2', 'zz9'] },
   8: { userId: 8, displayname: 'VuxxLong', badges: [] },
 };
 
@@ -22,14 +22,14 @@ globalThis.fetch = async (input, init = {}) => {
         {
           subtitleId: 1,
           releaseInfo: ['Loki.S01E06.WEBRip.x264-ION10'],
-          commentary: 'Dịch bởi bobbyocean (Fb.com/ImHighOnKetamine)   | sync lại',
+          commentary: 'D&#7883;ch bởi bobbyocean (Fb.com/ImHighOnKetamine)   | sync l&#x1EA1;i &amp; fix',
           uploaderId: 7,
           contributors: [{ id: 7, displayname: 'bobbyocean' }],
           rating: { good: 12, bad: 2, total: 14 },
         },
         {
           subtitleId: 2,
-          releaseInfo: ['Loki.S01E06.1080p.DSNP.WEBRip.DDP5.1.x264-TOMMY'],
+          releaseInfo: ['Loki.S01E06.1080p.DSNP.WEBRip.DDP5.1.x264-TOMMY', 'Loki.S01E06.720p.DSNP.WEBRip.DDP5.1.x264-TOMMY'],
           commentary: '',
           uploaderId: 8,
           contributors: [{ id: 9, displayname: 'NguyenUyen' }],
@@ -57,14 +57,14 @@ const CASES = [
   { why: 'the other episode is dropped', got: () => byId['3'], want: undefined },
   { why: 'the matching release ranks first', got: () => list[0]?.id, want: '1' },
   {
-    why: 'a verified uploader, its translator and comment are in the label',
+    why: 'badge codes become words, unknown and donor badges are left out, entities are decoded',
     got: () => subsourceLabel(byId['1']),
-    want: 'WisFilm-SubSource · Loki.S01E06.WEBRip.x264-ION10 · Đăng: bobbyocean (đã xác minh) · 12/14 thích · “Dịch bởi bobbyocean (Fb.com/ImHighOnKetamine) | sync lại”',
+    want: 'WisFilm-SubSource · Loki.S01E06.WEBRip.x264-ION10 · Đăng: bobbyocean (dịch giả đã xác minh) · 12/14 thích · “Dịch bởi bobbyocean (Fb.com/ImHighOnKetamine) | sync lại & fix”',
   },
   {
     why: 'a translator other than the uploader is named, and CC is kept',
     got: () => subsourceLabel(byId['2']),
-    want: 'WisFilm-SubSource · Loki.S01E06.1080p.DSNP.WEBRip.DDP5.1.x264-TOMMY · CC · Đăng: VuxxLong · Dịch: NguyenUyen',
+    want: 'WisFilm-SubSource · Loki.S01E06.1080p.DSNP.WEBRip.DDP5.1.x264-TOMMY +1 bản · CC · Đăng: VuxxLong · Dịch: NguyenUyen',
   },
   {
     why: 'an uploader that cannot be looked up leaves the label without a name',
