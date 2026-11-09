@@ -98,6 +98,23 @@ export const CONFIG = {
   subtitleLimit: Number(env.SUBTITLE_LIMIT || 5),
   // Cửa phụ đề cũ nhận diện client qua UA; để trống là bị từ chối.
   subtitleUserAgent: env.SUBTITLE_UA || 'VLSub 0.10.2',
+
+  // SubSource: nguồn phụ đề thứ hai, gọi thẳng API chính chủ thay vì qua addon
+  // của họ. Phải có khoá; không có khoá thì nguồn tự tắt chứ không báo lỗi.
+  // Khoá đặt bằng secret, không bao giờ nằm trong repo:
+  //   npx wrangler secret put SUBSOURCE_API_KEY
+  subsourceApi: (env.SUBSOURCE_API || 'https://api.subsource.net/api/v1').replace(/[/]+$/, ''),
+  subsourceKey: env.SUBSOURCE_API_KEY || '',
+  // Tên ngôn ngữ theo cách SubSource gọi, không phải mã ISO.
+  subsourceLang: env.SUBSOURCE_LANG || 'vietnamese',
+  // Mặc định BẬT: thiếu khoá thì từng request tự bỏ qua nguồn này. Mặc định theo
+  // secret thì deployment không đặt secret sẽ lờ luôn khoá người cài nhập qua
+  // /configure.
+  enableSubsource: bool(env.ENABLE_SUBSOURCE, true),
+  // Trần cho kho .zip tải về. Đây chính là chỗ addon SubSource ngoài kia gục:
+  // bung cả kho ra bộ nhớ. Ở đây chỉ dùng để chặn trường hợp bệnh hoạn, vì
+  // đường bình thường chỉ giải nén đúng một tệp trong kho.
+  subsourceMaxArchive: Number(env.SUBSOURCE_MAX_ARCHIVE || 32) * 1024 * 1024,
   // Segment Nguồn C đi đường nào: 'addon' là qua chính addon (trình phát nào
   // cũng xem được, tốn băng thông của addon), 'stremio' là qua server nội bộ
   // của Stremio (nhẹ hơn nhưng CHỈ chạy trong Stremio — trình phát khác báo

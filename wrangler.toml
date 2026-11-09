@@ -6,6 +6,15 @@ compatibility_date = "2026-08-01"
 # mọi biến môi trường đều undefined và addon chạy bằng giá trị mặc định.
 compatibility_flags = ["nodejs_compat"]
 
+# Cùng một cái bẫy như [vars] bên dưới, lần này là routes: deploy ghi đè cả
+# danh sách route. Domain này thêm qua Dashboard nên file không biết nó tồn
+# tại, và lần deploy đầu tiên sẽ gỡ nó ra — địa chỉ addon chết theo, trong khi
+# Worker vẫn chạy ngon lành ở đuôi workers.dev nên nhìn log không thấy gì sai.
+# Khai ở đây thì deploy giữ nguyên, và wrangler hết hỏi.
+routes = [
+  { pattern = "stremio.wis237.online", custom_domain = true }
+]
+
 # CẢNH BÁO: `wrangler deploy` GHI ĐÈ toàn bộ biến của Worker bằng đúng khối
 # [vars] dưới đây. Biến thêm tay trong dashboard sẽ biến mất ở lần deploy sau,
 # nên khai ở đây mới là chỗ giữ được — file này nằm trong git, dashboard thì không.

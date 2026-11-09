@@ -8,7 +8,11 @@ import { playlistFor as hh3dPlaylist } from './lib/hh3dPlayer.js';
 import { hh3dBase, isHh3dPage } from './lib/hh3dBase.js';
 import { routesTo } from './sources/nguonc.js';
 import { pinsFor } from './lib/subtitlePins.js';
-import { vietnameseSubtitles, downloadAllowed, fetchSubtitle } from './lib/subtitleSearch.js';
+import { vietnameseSubtitles, downloadAllowed, fetchSubtitle, openSubtitlesLabel } from './lib/subtitleSearch.js';
+import { subsourceSubtitles, fetchSubsourceSubtitle, subsourceLabel } from './sources/subsource.js';
+import { splitConfig, settingsFrom } from './lib/addonConfig.js';
+import { verdictMark } from './lib/releaseMatch.js';
+import { configurePage } from './lib/configure.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
 
@@ -190,11 +194,31 @@ export async function handleRequest(req, res) {
     }
     path = path.replace(/\/+$/, '') || '/';
 
+    /**
+     * Cấu hình của người cài đi theo URL: `/<cấu hình>/manifest.json`. Stremio
+     * không cất cấu hình hộ addon, nên đó là chỗ duy nhất để nó.
+     *
+     * Tách ra ngay đây, trước khi định tuyến, để mọi tuyến bên dưới viết y hệt
+     * như khi không có nó. URL trần vẫn chạy nguyên vẹn: `seg` rỗng và
+     * `settings` lấy từ biến môi trường của deployment.
+     */
+    const { seg: cfgSeg, rest: routePath, config } = splitConfig(path);
+    path = routePath;
+    const settings = settingsFrom(config);
+    const cfgPrefix = cfgSeg ? `/${cfgSeg}` : '';
+
     if (path === '/') {
       res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' });
       return res.end(landingPage(baseUrlOf(req)));
     }
     if (path === '/manifest.json') return send(res, 200, manifestFor(req), { edge: true });
+
+    // Stremio mở tuyến này khi bấm Configure. Trang tự dựng URL cài ở trình
+    // duyệt, nên khoá không đi qua máy chủ ở bước nhập.
+    if (path === '/configure') {
+      res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' });
+      return res.end(configurePage(baseUrlOf(req), config));
+    }
 
     // Logo của addon, phục vụ tại chỗ để manifest khỏi trỏ ra bên ngoài.
     // Hai định dạng: PNG cho Stremio, SVG cho trang web và ai muốn bản nét.
@@ -247,6 +271,56 @@ export async function handleRequest(req, res) {
       });
       return res.end(text);
     }
+
+    /**
+     * /subsource.srt?id=<mã>&s=&e=&f=<tên tệp> — tải hộ một phụ đề SubSource.
+     *
+     * Khoá API ở lại phía máy chủ, không bao giờ ra tới Stremio — nên tuyến này
+     * nhận mã phụ đề chứ không nhận link.
+     *
+     * `s`/`e`/`f` là để CHỌN tệp trong kho: kho của SubSource thường là nguyên
+     * một phần phim, không có số tập thì không biết lấy tệp nào.
+     */
+    if (path === '/subsource.srt') {
+      const sid = url?.searchParams?.get('id') || '';
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(sid)) {
+        return send(res, 400, { err: 'mã phụ đề không hợp lệ', id: sid || null });
+      }
+      // Khoá lấy từ cấu hình trong URL, hoặc từ secret khi URL không mang cấu
+      // hình. Không có đường nào cho ra khoá thì nói thẳng chứ đừng gọi API rồi
+      // trả về 401 khó hiểu.
+      if (!settings.subsourceKey) {
+        return send(res, 503, {
+          err: cfgSeg
+            ? 'cấu hình trong URL không có khoá SubSource — vào /configure nhập lại'
+            : 'chưa đặt SUBSOURCE_API_KEY, hoặc cài addon qua /configure',
+        });
+      }
+
+      const ctx = {
+        season: Number(url.searchParams.get('s')) || null,
+        episode: Number(url.searchParams.get('e')) || null,
+        filename: url.searchParams.get('f') || '',
+      };
+
+      let text;
+      try {
+        text = await fetchSubsourceSubtitle(sid, ctx, settings);
+      } catch (err) {
+        return send(res, 502, { err: err.message, id: sid });
+      }
+      // Kho có phụ đề nhưng không tệp nào mang đúng số tập: thà báo hỏng để
+      // Stremio cho chọn bản khác, còn hơn phát phụ đề của tập khác.
+      if (!text) return send(res, 502, { err: 'không có tệp nào khớp tập trong kho', id: sid });
+
+      res.writeHead(200, {
+        ...CORS,
+        'content-type': 'application/x-subrip; charset=utf-8',
+        'cache-control': 'public, max-age=86400, s-maxage=604800',
+      });
+      return res.end(text);
+    }
+
     /**
      * /subtitles/:type/:id/:extra.json — phụ đề cho phim đang xem.
      *
@@ -266,23 +340,57 @@ export async function handleRequest(req, res) {
       const extra = new URLSearchParams(cut === -1 ? '' : rest.slice(cut + 1));
       const filename = extra.get('filename') || '';
 
+      // Số phần/tập, để chọn đúng tệp trong kho .zip của SubSource.
+      const part = id.split(':');
+      const season = part[0] === 'kitsu' ? null : Number(part[1]) || null;
+      const episode = part[0] === 'kitsu' ? null : Number(part[2]) || null;
+
+      // Mọi nhãn đều mở đầu bằng WisFilm-<nguồn>. Danh sách phụ đề của Stremio
+      // trộn kết quả của mọi addon có khai `subtitles` và KHÔNG hiện addon nào
+      // đẻ ra dòng nào — nên không ghi vào nhãn thì không tài nào phân biệt với
+      // addon SubSource rời đang cài song song.
       // Bản ghim tay trước: đó là bản bạn đã chọn, không cần đoán gì.
       const subtitles = pinsFor(id, filename).map((s, i) => ({
         id: `pin-${i}`,
         url: s.url,
         lang: s.lang || 'vie',
-        ...(s.label ? { label: s.label } : {}),
+        label: s.label ? `WisFilm-Ghim · ${s.label}` : 'WisFilm-Ghim',
       }));
 
-      // Rồi mới tới bản tự tìm, và chỉ tiếng Việt. Mỗi bản đi qua /sub.srt vì
-      // nguồn giao file .gz với bảng mã không phải UTF-8.
       const base = baseUrlOf(req);
-      for (const s of await vietnameseSubtitles(id, filename)) {
+
+      // SubSource: tuyến riêng vì khoá API phải ở lại máy chủ, và vì kho .zip
+      // cần số tập mới chọn được tệp.
+      // Hai nguồn hỏi cùng lúc: mỗi nguồn mất cả giây, chờ lần lượt là cộng dồn.
+      const [fromSubsource, fromOpenSubtitles] = await Promise.all([
+        subsourceSubtitles(id, filename, settings),
+        vietnameseSubtitles(id, filename),
+      ]);
+      for (const s of fromSubsource) {
+        const q = new URLSearchParams({ id: s.id });
+        if (season) q.set('s', String(season));
+        if (episode) q.set('e', String(episode));
+        if (filename) q.set('f', filename);
+        subtitles.push({
+          id: `ss-${s.id}`,
+          // Mang theo đoạn cấu hình, nếu không thì lúc Stremio gọi về lấy phụ
+          // đề là mất khoá của người cài.
+          url: `${base}${cfgPrefix}/subsource.srt?${q}`,
+          lang: 'vie',
+          // Dấu ✓ / ⚠ đứng trước để nhìn danh sách là biết vì sao nó xếp thứ
+          // tự đó, thay vì phải thử từng bản mới biết bản nào khớp.
+          label: `${verdictMark(s.verdict)}${subsourceLabel(s)}`,
+        });
+      }
+
+      // OpenSubtitles đi qua /sub.srt vì nguồn giao file .gz với bảng mã không
+      // phải UTF-8.
+      for (const s of fromOpenSubtitles) {
         subtitles.push({
           id: `os-${s.id}`,
           url: `${base}/sub.srt?u=${encodeURIComponent(s.url)}&enc=${encodeURIComponent(s.encoding)}`,
           lang: 'vie',
-          label: `${s.release} · ${s.downloads.toLocaleString('vi-VN')} lượt tải`,
+          label: `${verdictMark(s.verdict)}${openSubtitlesLabel(s)}`,
         });
       }
 

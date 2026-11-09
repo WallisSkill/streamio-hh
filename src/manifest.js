@@ -6,7 +6,7 @@ export const MANIFEST = {
   // resource mà quên tăng số này thì bản đã cài vẫn giữ manifest cũ: addon khai
   // 'subtitles' mà Stremio không bao giờ hỏi xin phụ đề. Thêm/bớt resource là
   // phải tăng.
-  version: '1.1.0',
+  version: '1.2.0',
   name: 'WiSFilm',
   description:
     'Gộp nhiều nguồn phim trong nước, khớp đúng số tập với danh sách chính thức trên Stremio (Cinemeta/Kitsu). Hỗ trợ đánh số theo phần và đánh số tuyệt đối.',
@@ -19,5 +19,12 @@ export const MANIFEST = {
   types: ['movie', 'series'],
   idPrefixes: ['tt', 'kitsu'],
   catalogs: [],
-  behaviorHints: { configurable: false, adult: false },
+  // Stremio thấy cờ configurable thì hiện nút Configure và mở /configure của
+  // addon. configurationRequired để false vì bản cài trần vẫn chạy đủ mọi thứ,
+  // chỉ thiếu mỗi nguồn SubSource.
+  config: [
+    { key: 'subsourceKey', type: 'password', title: 'SubSource API key' },
+    { key: 'subsourceLang', type: 'text', title: 'Ngôn ngữ phụ đề SubSource', default: 'vietnamese' },
+  ],
+  behaviorHints: { configurable: true, configurationRequired: false, adult: false },
 };
