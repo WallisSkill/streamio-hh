@@ -512,6 +512,18 @@ Xem `.env.example`: `PORT`, `ADDON_BASE_URL`, `KKPHIM_API`, `OPHIM_API`,
 `HH3D_HOST_HINT`, `ENABLE_KKPHIM`, `ENABLE_OPHIM`, `ENABLE_NGUONC`,
 `ENABLE_HH3D`, `RESOLVE_EMBEDS`, `EMBED_HOSTS`, `EMBED_TTL`, `CACHE_TTL`.
 
+## Truyền hình (IPTV)
+
+Vào `/configure`, dán tối đa 5 link danh sách `.m3u`/`.m3u8` vào ô "Link danh sách
+IPTV" rồi cài lại. Addon khai thêm catalog `tv` tên "Truyền hình": nhóm
+`group-title` thành lựa chọn thể loại, kênh trùng tên gộp thành một ô với mỗi link
+là một nguồn, header `#EXTVLCOPT`/`#EXTHTTP`/`|User-Agent=` đi theo
+`proxyHeaders`, kênh có DRM bị bỏ. Addon không mang sẵn link kênh nào.
+
+Biến môi trường: `IPTV_PLAYLISTS` (danh sách cho bản cài trần), `IPTV_TTL` (giây,
+mặc định 900), `IPTV_MAX_MB` (8), `IPTV_MAX_CHANNELS` (5000), `IPTV_ALLOW_PRIVATE`
+(mặc định tắt: link trỏ vào địa chỉ nội bộ bị từ chối). Test: `node test/iptv.mjs`.
+
 ## Ghi chú
 
 - Không phụ thuộc package nào — chỉ cần Node ≥ 18, không phải `npm install`.

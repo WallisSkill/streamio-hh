@@ -121,6 +121,14 @@ export const CONFIG = {
   // "unrecognized file format").
   nguoncSegmentMode: (env.NGUONC_SEGMENT_MODE || 'addon').toLowerCase(),
   cacheTtl: Number(env.CACHE_TTL || 1800) * 1000,
+  // Truyền hình: danh sách M3U người cài tự nhập ở /configure. IPTV_PLAYLISTS
+  // là danh sách cho bản cài trần (URL không mang cấu hình) của chính chủ.
+  iptvPlaylists: env.IPTV_PLAYLISTS || '',
+  iptvTtl: Number(env.IPTV_TTL || 900) * 1000,
+  iptvMaxBytes: Number(env.IPTV_MAX_MB || 8) * 1024 * 1024,
+  iptvMaxChannels: Number(env.IPTV_MAX_CHANNELS || 5000),
+  // Link do người dùng gõ mà addon tự đi lấy, nên mặc định chặn địa chỉ nội bộ.
+  iptvAllowPrivate: bool(env.IPTV_ALLOW_PRIVATE, false),
   cinemeta: 'https://v3-cinemeta.strem.io',
   kitsuApi: 'https://kitsu.io/api/edge',
   userAgent:

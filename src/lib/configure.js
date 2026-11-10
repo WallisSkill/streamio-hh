@@ -52,7 +52,8 @@ export function configurePage(baseUrl, current = null) {
   }
   label { display: block; font-size: 14px; font-weight: 600; margin: 0 0 6px; }
   .hint { font-size: 13px; color: var(--dim); font-weight: 400; margin: 0 0 8px; }
-  input[type=text], input[type=password] {
+  textarea { resize: vertical; }
+  input[type=text], input[type=password], textarea {
     width: 100%; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     padding: 12px; border-radius: 9px; border: 1px solid var(--line);
     background: var(--bg); color: var(--ink);
@@ -88,7 +89,7 @@ export function configurePage(baseUrl, current = null) {
 </style>
 <div class="wrap">
   <header>${LOGO_SVG}<h1>Cấu hình</h1></header>
-  <p class="lede">Nhập khoá SubSource của bạn, rồi bấm cài. Khoá đi theo URL cài addon.</p>
+  <p class="lede">Nhập khoá SubSource và link danh sách truyền hình của bạn, rồi bấm cài. Mọi thứ đi theo URL cài addon.</p>
 
   <div class="card">
     <div class="field">
@@ -102,6 +103,13 @@ export function configurePage(baseUrl, current = null) {
       <p class="hint">Tên ngôn ngữ theo cách SubSource gọi, không phải mã ISO — <code>vie</code> và <code>vi</code> đều trả về rỗng.</p>
       <input type="text" id="lang" autocomplete="off" spellcheck="false"
              placeholder="${escape(CONFIG.subsourceLang)}" value="${escape(cur.subsourceLang || '')}">
+    </div>
+
+    <div class="field">
+      <label for="iptv">Link danh sách IPTV (M3U)</label>
+      <p class="hint">Mỗi dòng một link <code>.m3u</code> / <code>.m3u8</code>, tối đa 5. Kênh hiện ở mục Truyền hình, nhóm theo <code>group-title</code> của danh sách. Để trống nếu không xem truyền hình.</p>
+      <textarea id="iptv" rows="3" autocomplete="off" spellcheck="false"
+                placeholder="https://example.com/playlist.m3u">${escape(cur.iptv || '')}</textarea>
     </div>
 
     <button class="btn" id="go">Cài vào Stremio</button>
@@ -139,6 +147,8 @@ export function configurePage(baseUrl, current = null) {
     var lang = document.getElementById('lang').value.trim();
     if (key) cfg.subsourceKey = key;
     if (lang) cfg.subsourceLang = lang;
+    var iptv = document.getElementById('iptv').value.split(/[\\s,]+/).filter(function (u) { return /^https?:\\/\\//i.test(u); });
+    if (iptv.length) cfg.iptv = iptv.slice(0, 5).join('\\n');
     if (!Object.keys(cfg).length) return '';
     return '/' + b64url(JSON.stringify(cfg));
   }
@@ -149,6 +159,7 @@ export function configurePage(baseUrl, current = null) {
 
   document.getElementById('key').addEventListener('input', refresh);
   document.getElementById('lang').addEventListener('input', refresh);
+  document.getElementById('iptv').addEventListener('input', refresh);
 
   document.getElementById('go').addEventListener('click', function () {
     var url = BASE + segment() + '/manifest.json';

@@ -15,6 +15,17 @@ import { verdictMark } from './lib/releaseMatch.js';
 import { configurePage } from './lib/configure.js';
 import { landingPage } from './lib/landing.js';
 import { LOGO_SVG, LOGO_PNG } from './lib/logo.js';
+import {
+  IPTV_TYPE,
+  IPTV_CATALOG,
+  IPTV_PREFIX,
+  loadChannels,
+  groupsOf,
+  catalogPage,
+  channelMeta,
+  channelStreams,
+  parseExtra,
+} from './lib/iptv.js';
 
 /**
  * Try one route to nguonc and say whether real data came back.
@@ -163,10 +174,43 @@ function baseUrlOf(req) {
  * nó phải là đường dẫn đầy đủ. Suy ra từ chính request thay vì cấu hình, để
  * addon chạy ở đâu cũng trỏ đúng vào bản thân nó.
  */
-function manifestFor(req) {
+async function manifestFor(req, settings) {
   // PNG chứ không phải SVG: Stremio dựng logo bằng thẻ ảnh, và không phải bản
   // nào cũng đọc được SVG — hỏng thì ô addon chỉ còn hình mảnh ghép.
-  return { ...MANIFEST, logo: `${baseUrlOf(req)}/logo.png` };
+  const base = { ...MANIFEST, logo: `${baseUrlOf(req)}/logo.png` };
+  if (!settings.iptv.length) return base;
+
+  // Có danh sách IPTV thì addon khai thêm một catalog loại `tv`. Nhóm kênh
+  // (group-title) thành lựa chọn `genre`, nên app nào hiểu Stremio cũng lọc
+  // được theo nhóm. Danh sách tải hỏng vẫn khai catalog, chỉ thiếu nhóm.
+  const { channels } = await loadChannels(settings.iptv);
+  const idPrefixes = [...MANIFEST.idPrefixes, IPTV_PREFIX];
+  return {
+    ...base,
+    types: [...MANIFEST.types, IPTV_TYPE],
+    idPrefixes,
+    resources: [
+      'catalog',
+      { name: 'meta', types: [IPTV_TYPE], idPrefixes: [IPTV_PREFIX] },
+      { name: 'stream', types: [...MANIFEST.types, IPTV_TYPE], idPrefixes },
+      { name: 'subtitles', types: MANIFEST.types, idPrefixes: MANIFEST.idPrefixes },
+    ],
+    catalogs: [
+      {
+        type: IPTV_TYPE,
+        id: IPTV_CATALOG,
+        name: 'Truyền hình',
+        extra: [{ name: 'genre', options: groupsOf(channels) }, { name: 'search' }, { name: 'skip' }],
+      },
+    ],
+  };
+}
+
+/** Kênh theo id, trong đúng các danh sách của bản cài đang gọi. */
+async function findChannel(settings, id) {
+  if (!settings.iptv.length) return null;
+  const { channels } = await loadChannels(settings.iptv);
+  return channels.find((ch) => ch.id === id) || null;
 }
 
 /**
@@ -204,6 +248,10 @@ export async function handleRequest(req, res) {
      */
     const { seg: cfgSeg, rest: routePath, config } = splitConfig(path);
     path = routePath;
+    // Bản chưa giải mã của đường dẫn, cho đoạn `extra` của catalog: tên nhóm
+    // kênh có thể chứa `&` hay `=`, giải mã trước rồi mới tách là tách sai.
+    let rawPath = (url ? url.pathname : path).replace(/\/+$/, '') || '/';
+    if (cfgSeg && rawPath.startsWith(`/${cfgSeg}/`)) rawPath = rawPath.slice(cfgSeg.length + 1);
     const settings = settingsFrom(config);
     const cfgPrefix = cfgSeg ? `/${cfgSeg}` : '';
 
@@ -211,7 +259,7 @@ export async function handleRequest(req, res) {
       res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' });
       return res.end(landingPage(baseUrlOf(req)));
     }
-    if (path === '/manifest.json') return send(res, 200, manifestFor(req), { edge: true });
+    if (path === '/manifest.json') return send(res, 200, await manifestFor(req, settings), { edge: true });
 
     // Stremio mở tuyến này khi bấm Configure. Trang tự dựng URL cài ở trình
     // duyệt, nên khoá không đi qua máy chủ ở bước nhập.
@@ -230,6 +278,25 @@ export async function handleRequest(req, res) {
         'cache-control': 'public, max-age=86400',
       });
       return res.end(png ? LOGO_PNG : LOGO_SVG);
+    }
+
+    // /catalog/tv/wis-iptv[/genre=..&search=..&skip=..].json — kênh truyền hình.
+    const cat = new RegExp(`^/catalog/${IPTV_TYPE}/${IPTV_CATALOG}(?:/([^/]*?))?(?:\\.json)?$`).exec(rawPath);
+    if (cat) {
+      if (!settings.iptv.length) return send(res, 200, { metas: [] });
+      const { channels, errors } = await loadChannels(settings.iptv);
+      if (errors.length) console.warn('[iptv]', errors.join(' | '));
+      const metas = catalogPage(channels, parseExtra(cat[1]));
+      return send(res, 200, { metas, cacheMaxAge: 900 }, { edge: true });
+    }
+
+    // /meta/tv/iptv:<id>.json và /stream/tv/iptv:<id>.json
+    const live = new RegExp(`^/(meta|stream)/${IPTV_TYPE}/(${IPTV_PREFIX}[^/]+?)(?:\\.json)?$`).exec(path);
+    if (live) {
+      const [, resource, id] = live;
+      const ch = await findChannel(settings, id);
+      if (resource === 'meta') return send(res, 200, { meta: ch ? channelMeta(ch) : null }, { edge: !!ch });
+      return send(res, 200, { streams: ch ? channelStreams(ch) : [], cacheMaxAge: 300 }, { edge: !!ch });
     }
 
     // /stream/:type/:id.json

@@ -13,12 +13,13 @@
  * khi URL không mang cấu hình.
  */
 import { CONFIG } from '../config.js';
+import { playlistUrls } from './iptv.js';
 
 /**
  * Hình dạng đoạn cấu hình. Dùng để loại nhanh những đoạn rõ ràng là tên tuyến
  * trước khi thử giải mã — `sub.srt`, `manifest.json` có dấu chấm nên trượt ngay.
  */
-const SHAPE = /^[A-Za-z0-9_-]{8,2048}$/;
+const SHAPE = /^[A-Za-z0-9_-]{8,4096}$/;
 
 function b64urlEncode(text) {
   const bytes = new TextEncoder().encode(text);
@@ -89,7 +90,11 @@ export function settingsFrom(config) {
   // URL trần, không mang cấu hình: đây là bản cài của chính chủ deployment, nên
   // dùng khoá đặt bằng secret. Tuyến này giữ nguyên, không bỏ.
   if (!config) {
-    return { subsourceKey: CONFIG.subsourceKey, subsourceLang: CONFIG.subsourceLang };
+    return {
+      subsourceKey: CONFIG.subsourceKey,
+      subsourceLang: CONFIG.subsourceLang,
+      iptv: playlistUrls(CONFIG.iptvPlaylists),
+    };
   }
 
   // URL có cấu hình: khoá của người cài là khoá DUY NHẤT, không có dự phòng.
@@ -101,5 +106,8 @@ export function settingsFrom(config) {
     subsourceKey: String(config.subsourceKey || '').trim(),
     // Ngôn ngữ không phải thông tin bí mật, để trống thì lấy mặc định.
     subsourceLang: String(config.subsourceLang || '').trim() || CONFIG.subsourceLang,
+    // Danh sách kênh cũng chỉ của người cài: bản đã cấu hình không mượn của
+    // deployment, kẻo người ta thấy kênh mà không biết từ đâu ra.
+    iptv: playlistUrls(config.iptv),
   };
 }
