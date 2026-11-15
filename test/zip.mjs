@@ -177,6 +177,35 @@ const CASES = [
     want: null,
   },
   {
+    // Kho tải qua DownSub chỉ đánh số tập, không có số phần — trước đây cả gói
+    // bị coi là không khớp tập nào và Stremio bấm vào không ra gì.
+    why: 'the EP1 naming style (no season in the name) counts as the episode',
+    got: () =>
+      pickSubtitleEntry(
+        entries(
+          '[Vietnamese] EP1_ Swallowed Star [DownSub.com].srt',
+          '[Vietnamese] EP5_ Swallowed Star [DownSub.com].srt',
+          '[Vietnamese] EP15_ Swallowed Star [DownSub.com].srt',
+        ),
+        { season: 1, episode: 5 },
+      )?.name,
+    want: '[Vietnamese] EP5_ Swallowed Star [DownSub.com].srt',
+  },
+  {
+    why: 'EP5 must not match EP15 either',
+    got: () =>
+      pickSubtitleEntry(entries('Show EP15.srt', 'Show EP16.srt'), { season: 1, episode: 5 }),
+    want: null,
+  },
+  {
+    // Nhận bừa dạng chỉ-có-số-tập trong kho có đánh số phần thì tập 5 phần 2
+    // chiếm chỗ tập 5 phần 1.
+    why: 'a bare EP number never overrides season naming in the same archive',
+    got: () =>
+      pickSubtitleEntry(entries('Show.S02E05.srt', 'Show EP5 extra.srt'), { season: 1, episode: 5 }),
+    want: null,
+  },
+  {
     why: '__MACOSX junk is never chosen',
     got: () =>
       pickSubtitleEntry(entries('__MACOSX/._Show.S01E05.srt', 'Show.S01E05.srt'), {

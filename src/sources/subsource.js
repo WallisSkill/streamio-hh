@@ -289,17 +289,35 @@ export function pickSubtitleEntry(entries, { filename = '', season = null, episo
   }
 
   const words = wordsOf(filename);
-  // Hai cách đặt tên thông dụng: "S01E05" và "1x05". Thiếu dạng thứ hai thì
-  // kho dùng lối đặt tên đó bị coi là không khớp tập nào và rơi về null.
-  const tag =
-    season != null && episode != null
-      ? new RegExp(`(?:s0*${season}[\\s._-]*e0*${episode}|\\b0*${season}x0*${episode})(?!\\d)`, 'i')
-      : null;
+  const known = season != null && episode != null;
+
+  // Tên kèm số phần: "S01E05" và "1x05". Dạng tin được, vì nó nói rõ tập này
+  // thuộc phần nào.
+  const tag = known
+    ? new RegExp(`(?:s0*${season}[\\s._-]*e0*${episode}|\\b0*${season}x0*${episode})(?!\\d)`, 'i')
+    : null;
+
+  // Dạng CHỈ có số tập: "EP1_", "Episode 1", "Tap 01". Kho tải qua DownSub đặt
+  // tên kiểu này — 26 tệp "[Vietnamese] EP1_ Swallowed Star [DownSub.com].srt" —
+  // nên chỉ nhận hai dạng trên là cả gói coi như không khớp tập nào: phụ đề vẫn
+  // hiện trong Stremio nhưng bấm vào không ra gì (đo 15/11/2026: 502 "không có
+  // tệp nào khớp tập trong kho").
+  const bare = known
+    ? new RegExp(`\\b(?:ep|e|episode|tap|tập)[\\s._-]*0*${episode}(?!\\d)`, 'i')
+    : null;
+
+  // Dạng đó KHÔNG mang số phần, nên chỉ tin khi cả kho không dùng lối đặt tên
+  // theo phần: kho trộn cả hai mà nhận bừa thì "EP1" của phần khác chen vào chỗ
+  // của S02E01.
+  const hasSeasonNaming = usable.some((x) =>
+    /(?:s\d{1,2}[\s._-]*e\d{1,3}|\b\d{1,2}x\d{1,3})(?!\d)/i.test(x.name),
+  );
 
   const scored = usable
     .map((x) => {
       let score = overlap(words, x.name);
       if (tag?.test(x.name)) score += 100;
+      else if (!hasSeasonNaming && bare?.test(x.name)) score += 100;
       if (/\.srt$/i.test(x.name)) score += 1;
       return { entry: x, score };
     })
@@ -307,7 +325,7 @@ export function pickSubtitleEntry(entries, { filename = '', season = null, episo
 
   // Biết rõ đang xem tập nào mà không tệp nào mang đúng số tập ấy -> thà không
   // có còn hơn phát nhầm tập khác.
-  if (tag && scored[0].score < 100) return null;
+  if (known && scored[0].score < 100) return null;
 
   return scored[0].entry;
 }
