@@ -17,7 +17,7 @@ import { CONFIG } from '../config.js';
 import { cached } from '../lib/cache.js';
 import { getCinemeta, getKitsuMeta } from '../lib/meta.js';
 import { isZip, readZip, extractEntry } from '../lib/zip.js';
-import { cleanSubtitle } from '../lib/subtitleText.js';
+import { cleanSubtitle, decodeSubtitle } from '../lib/subtitleText.js';
 import { isAss, assToSrt } from '../lib/assToSrt.js';
 import { releaseScore, wrongEpisode } from '../lib/releaseMatch.js';
 
@@ -388,6 +388,6 @@ export async function fetchSubsourceSubtitle(subtitleId, ctx = {}, settings = {}
     if (!raw) return null;
   }
 
-  const text = new TextDecoder('utf-8').decode(raw);
+  const text = decodeSubtitle(raw);
   return isAss(text) ? assToSrt(text) : cleanSubtitle(text);
 }

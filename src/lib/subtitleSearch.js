@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { cacheGet, cacheSet } from './cache.js';
-import { cleanSubtitle } from './subtitleText.js';
+import { cleanSubtitle, decodeSubtitle } from './subtitleText.js';
 import { isAss, assToSrt } from './assToSrt.js';
 import { releaseScore, wrongEpisode } from './releaseMatch.js';
 
@@ -165,14 +165,9 @@ export async function fetchSubtitle(url, encoding = 'UTF-8') {
     await new Response(res.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer(),
   );
 
-  const label = String(encoding || 'utf-8').toLowerCase();
-  let text;
-  try {
-    text = new TextDecoder(label).decode(raw);
-  } catch {
-    // Nhãn bảng mã lạ làm TextDecoder ném ngay lúc dựng — lùi về UTF-8.
-    text = new TextDecoder('utf-8').decode(raw);
-  }
+  // Nhãn do OpenSubtitles khai chỉ là gợi ý: BOM và byte 00 trong chính tệp
+  // mới là bằng chứng, nên để decodeSubtitle quyết (nó nhận cả UTF-16).
+  const text = decodeSubtitle(raw, encoding);
 
   // File ASS nguyên bản: Stremio không dựng được cue nào từ nó, phải đổi hẳn
   // sang SRT chứ dọn thẻ thôi không đủ.

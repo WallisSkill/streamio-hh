@@ -2,7 +2,7 @@
  * Offline checks for ASS tag stripping.
  * No network, no server:  node test/subtitleText.mjs
  */
-import { cleanSubtitle } from '../src/lib/subtitleText.js';
+import { cleanSubtitle, decodeSubtitle } from '../src/lib/subtitleText.js';
 
 const CASES = [
   {
@@ -59,6 +59,33 @@ const CASES = [
     want:
       '1\n00:00:01,000 --> 00:00:04,000\nnơi một lựa chọn duy nhất\ncó thể dẫn tới vô số thực tại,\n\n2\n00:00:04,100 --> 00:00:06,000\nXin chào\n',
   },
+  // ---- nhận bảng mã ----
+  //
+  // SubSource có bản lưu UTF-16. Đoán cứng UTF-8 thì mỗi ký tự kèm một byte 00
+  // và trình phát báo lỗi thay vì hiện phụ đề.
+  ...(() => {
+    const srt = '1\n00:00:01,100 --> 00:00:03,400\nSơ khởi, Chúa tạo ra vũ trụ\n';
+    const u16 = (big) => {
+      const out = [];
+      for (const ch of srt) {
+        const c = ch.codePointAt(0);
+        if (big) out.push(c >> 8, c & 0xff);
+        else out.push(c & 0xff, c >> 8);
+      }
+      return new Uint8Array(out);
+    };
+    const bom = (bytes, head) => new Uint8Array([...head, ...bytes]);
+    const utf8 = new TextEncoder().encode(srt);
+    return [
+      { why: 'UTF-8 trần giữ nguyên', got: () => decodeSubtitle(utf8), want: srt },
+      { why: 'BOM UTF-8 bị bỏ đi', got: () => decodeSubtitle(bom(utf8, [0xef, 0xbb, 0xbf])), want: srt },
+      { why: 'UTF-16LE có BOM đọc được', got: () => decodeSubtitle(bom(u16(false), [0xff, 0xfe])), want: srt },
+      { why: 'UTF-16BE có BOM đọc được', got: () => decodeSubtitle(bom(u16(true), [0xfe, 0xff])), want: srt },
+      { why: 'UTF-16LE không BOM vẫn nhận ra (đếm byte 00)', got: () => decodeSubtitle(u16(false)), want: srt },
+      { why: 'UTF-16BE không BOM vẫn nhận ra', got: () => decodeSubtitle(u16(true)), want: srt },
+      { why: 'tệp rỗng không làm vỡ', got: () => decodeSubtitle(new Uint8Array()), want: '' },
+    ];
+  })(),
   { why: 'empty input passes through', got: () => cleanSubtitle(''), want: '' },
   { why: 'null input passes through', got: () => cleanSubtitle(null), want: null },
 ];
