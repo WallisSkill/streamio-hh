@@ -9,7 +9,8 @@ import { hh3dBase, isHh3dPage } from './lib/hh3dBase.js';
 import { routesTo } from './sources/nguonc.js';
 import { pinsFor } from './lib/subtitlePins.js';
 import { vietnameseSubtitles, downloadAllowed, fetchSubtitle, openSubtitlesLabel } from './lib/subtitleSearch.js';
-import { subsourceSubtitles, fetchSubsourceSubtitle, subsourceLabel } from './sources/subsource.js';
+import { subsourceSubtitles, fetchSubsourceSubtitle, subsourceLabel, pickSubtitleEntry } from './sources/subsource.js';
+import { isZip, readZip } from './lib/zip.js';
 import { splitConfig, settingsFrom } from './lib/addonConfig.js';
 import { verdictMark } from './lib/releaseMatch.js';
 import { configurePage } from './lib/configure.js';
@@ -676,8 +677,9 @@ export async function handleRequest(req, res) {
       const started = Date.now();
       let playlist = null;
       let error = null;
+      const trace = [];
       try {
-        playlist = await hh3dPlaylist(u, { segmentBase: `${baseUrlOf(req)}/hh3d-seg` });
+        playlist = await hh3dPlaylist(u, { segmentBase: `${baseUrlOf(req)}/hh3d-seg`, trace });
       } catch (err) {
         error = err.message;
       }
@@ -689,6 +691,9 @@ export async function handleRequest(req, res) {
         page: u,
         ms: Date.now() - started,
         error,
+        // Hỏng ở bước nào, nói thẳng: năm bước của luồng player đều trượt ra
+        // cùng một chữ "không lấy được link phát" nếu không ghi lại.
+        buocHong: trace.length ? trace : null,
         base: await hh3dBase(),
         via: playlist?.via ?? null,
         offset: playlist?.offset ?? null,
@@ -779,6 +784,44 @@ export async function handleRequest(req, res) {
         return send(res, 502, { err: err.message, segment: target });
       }
     }
+    // /probe/subsource?id=<mã>&s=&e= — bên trong kho phụ đề có những tệp nào và
+    // tệp nào được chọn. Câu hỏi riêng, vì "không tải được phụ đề" hầu hết là
+    // chọn tệp trong kho chứ không phải tải hỏng.
+    if (path === '/probe/subsource') {
+      const sid = url?.searchParams?.get('id') || '';
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(sid)) return send(res, 400, { err: 'thiếu ?id=' });
+      if (!settings.subsourceKey) return send(res, 503, { err: 'chưa có khoá SubSource' });
+      const ctx = {
+        season: Number(url.searchParams.get('s')) || null,
+        episode: Number(url.searchParams.get('e')) || null,
+        filename: url.searchParams.get('f') || '',
+      };
+      try {
+        const r = await fetch(`${CONFIG.subsourceApi}/subtitles/${encodeURIComponent(sid)}/download`, {
+          headers: { 'x-api-key': settings.subsourceKey, 'user-agent': CONFIG.userAgent },
+          signal: AbortSignal.timeout(CONFIG.httpTimeout),
+        });
+        if (!r.ok) return send(res, 200, { id: sid, status: r.status, err: 'tải hỏng' });
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        if (!isZip(bytes)) {
+          return send(res, 200, { id: sid, ctx, zip: false, bytes: bytes.length, head: new TextDecoder().decode(bytes.slice(0, 80)) });
+        }
+        const entries = readZip(bytes);
+        const chosen = pickSubtitleEntry(entries, ctx);
+        return send(res, 200, {
+          id: sid,
+          ctx,
+          zip: true,
+          bytes: bytes.length,
+          soTep: entries.length,
+          tep: entries.map((e) => e.name).slice(0, 60),
+          chon: chosen?.name || null,
+        });
+      } catch (err) {
+        return send(res, 200, { id: sid, err: err.message });
+      }
+    }
+
     // /probe/seg?u=<segment url>&r=<referer> — liệu deployment này có gọi được CDN
     // segment hay không. Câu hỏi riêng, vì CDN đó là tên miền khác với trang
     // embed và có thể không nằm sau cùng một lớp chặn.
@@ -789,7 +832,24 @@ export async function handleRequest(req, res) {
       const started = Date.now();
       try {
         const hit = await fetch(u, {
-          headers: { 'user-agent': CONFIG.userAgent, range: 'bytes=0-15', ...(r ? { referer: r } : {}) },
+          headers: url?.searchParams?.get('full')
+            ? {
+                // ?full=1 — gọi y như một trình duyệt mở trang: dùng để phân biệt
+                // "bị chặn vì thiếu header" với "bị chặn vì IP".
+                'user-agent': CONFIG.userAgent,
+                accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'accept-language': 'vi,en-US;q=0.9,en;q=0.8',
+                'upgrade-insecure-requests': '1',
+                'sec-fetch-dest': 'document',
+                'sec-fetch-mode': 'navigate',
+                'sec-fetch-site': 'none',
+                'sec-fetch-user': '?1',
+                'sec-ch-ua': '"Chromium";v="120", "Not(A:Brand";v="24", "Google Chrome";v="120"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                ...(r ? { referer: r } : {}),
+              }
+            : { 'user-agent': CONFIG.userAgent, range: 'bytes=0-15', ...(r ? { referer: r } : {}) },
           signal: AbortSignal.timeout(CONFIG.httpTimeout),
         });
         const buf = new Uint8Array(await hit.arrayBuffer());

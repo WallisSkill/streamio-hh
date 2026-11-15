@@ -2,7 +2,7 @@ import { CONFIG } from '../config.js';
 import { safe } from '../lib/http.js';
 import { cached } from '../lib/cache.js';
 import { detectSeason, decodeEntities } from '../lib/text.js';
-import { hh3dBase, forgetHh3dBase } from '../lib/hh3dBase.js';
+import { hh3dBase, forgetHh3dBase, hh3dHeaders } from '../lib/hh3dBase.js';
 
 /**
  * HH3D (hoathinh3d) — trang tìm kiếm, trang phim, và link từng tập.
@@ -44,11 +44,7 @@ async function fetchPage(url) {
     res = await fetch(url, {
     redirect: 'follow',
     signal: AbortSignal.timeout(CONFIG.httpTimeout),
-    headers: {
-      'user-agent': CONFIG.userAgent,
-      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'accept-language': 'vi-VN,vi;q=0.9,en;q=0.8',
-      },
+    headers: hh3dHeaders(),
     });
   } catch (err) {
     forgetHh3dBase();

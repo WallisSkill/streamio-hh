@@ -34,6 +34,46 @@ const KEY = 'hh3d:base';
  */
 const FALLBACK = 'https://hoathinh3d.you';
 
+/**
+ * Header giả một lượt mở trang bằng trình duyệt.
+ *
+ * Từ 15/11/2026 họ bật Cloudflare challenge: chỉ `user-agent` thôi là 403 ngay ở
+ * biên (đo 2ms, `cf-mitigated: challenge`), còn thêm đủ `accept` + `sec-fetch-*`
+ * + `sec-ch-ua` thì 200 (đo 29ms, 75KB) — kể cả từ IP của Cloudflare Workers.
+ * Nghĩa là họ lọc theo dấu vết request chứ không theo IP, nên thiếu cụm header
+ * này là cả nguồn HH3D tắt, không phải lag hay chậm.
+ *
+ * `kind: 'xhr'` cho mấy lời gọi nền của chính trang (player.php, player-key):
+ * trình duyệt gửi `sec-fetch-*` khác hẳn lúc mở trang, mà khớp đúng vai mới an
+ * toàn — hai cụm này không được lẫn vào nhau.
+ */
+export function hh3dHeaders(kind = 'document', extra = {}) {
+  const common = {
+    'user-agent': CONFIG.userAgent,
+    'accept-language': 'vi,en-US;q=0.9,en;q=0.8',
+    'sec-ch-ua': '"Chromium";v="120", "Not(A:Brand";v="24", "Google Chrome";v="120"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+  };
+  const role =
+    kind === 'xhr'
+      ? {
+          accept: 'application/json, text/javascript, */*; q=0.01',
+          'sec-fetch-dest': 'empty',
+          'sec-fetch-mode': 'cors',
+          'sec-fetch-site': 'same-origin',
+        }
+      : {
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'upgrade-insecure-requests': '1',
+          'sec-fetch-dest': 'document',
+          'sec-fetch-mode': 'navigate',
+          'sec-fetch-site': extra.referer ? 'same-origin' : 'none',
+          'sec-fetch-user': '?1',
+        };
+  return { ...common, ...role, ...extra };
+}
+
 /** Tên miền dò được gần nhất, dùng khi lần dò sau thất bại. */
 let lastGood = null;
 
@@ -49,10 +89,13 @@ async function resolve() {
   try {
     const res = await fetch(CONFIG.hh3dShortlink, {
       redirect: 'follow',
-      headers: { 'user-agent': CONFIG.userAgent, accept: 'text/html,*/*' },
+      headers: hh3dHeaders(),
       signal: AbortSignal.timeout(CONFIG.httpTimeout),
     });
-    if (!res.ok) return null;
+    // KHÔNG đòi res.ok: tên miền mới (hoathinh3d.pw) bật Cloudflare challenge nên
+    // trả 403 cho request không phải trình duyệt. Trạng thái đó nói về TRANG, còn
+    // chỗ chuyển hướng đến vẫn là tên miền đúng — bỏ nó đi là rơi về tên miền
+    // dự phòng đã chết, và cả nguồn HH3D tắt theo.
     const origin = new URL(res.url).origin;
     return looksRight(origin) ? origin : null;
   } catch {

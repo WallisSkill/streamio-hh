@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { cacheGet, cacheSet } from './cache.js';
-import { hh3dBase } from './hh3dBase.js';
+import { hh3dBase, hh3dHeaders } from './hh3dBase.js';
 
 /**
  * HH3D (hoathinh3d) -> một playlist Stremio phát được.
@@ -123,6 +123,18 @@ function session() {
   };
 }
 
+/**
+ * Ghi lại VÌ SAO một bước bỏ cuộc, rồi trả null như cũ.
+ *
+ * Luồng này có năm bước đều có thể trượt, và trượt bước nào cũng ra đúng một
+ * chữ "không lấy được link phát" — nên mỗi lần HH3D đổi gì là lại phải dựng tay
+ * lại cả luồng để biết chết ở đâu. Sổ này để /probe/hh3d nói thẳng.
+ */
+function note(trace, why) {
+  if (trace) trace.push(why);
+  return null;
+}
+
 /** Chuỗi ngẫu nhiên đóng vai X-Halim-Client, như player tự sinh trong sessionStorage. */
 const clientId = () =>
   [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -135,34 +147,37 @@ export function parseEpisodeUrl(pageUrl) {
 }
 
 /** Cấu hình player đã giải mã cho một trang tập, hoặc null. */
-async function playerConfig(pageUrl) {
+async function playerConfig(pageUrl, trace = null) {
   const parsed = parseEpisodeUrl(pageUrl);
-  if (!parsed) return null;
+  if (!parsed) return note(trace, 'url tập không đúng dạng');
 
   const origin = new URL(pageUrl).origin;
   const client = clientId();
   const s = session();
 
   // Trang tập trước: nó vừa cho post_id vừa mở phiên (cookie).
-  const pageRes = await s.go(pageUrl, { headers: { 'user-agent': CONFIG.userAgent } });
-  if (!pageRes.ok) return null;
+  const pageRes = await s.go(pageUrl, { headers: hh3dHeaders() });
+  if (!pageRes.ok) return note(trace, `trang tập HTTP ${pageRes.status}`);
   const postId = /"post_id":\s*"?(\d+)/.exec(await pageRes.text())?.[1];
-  if (!postId) return null;
+  if (!postId) return note(trace, 'trang tập không có post_id');
 
-  const headers = () => ({
-    'user-agent': CONFIG.userAgent,
-    referer: pageUrl,
-    'x-requested-with': 'XMLHttpRequest',
-    'x-halim-client': client,
-    cookie: s.cookie(),
-  });
+  const headers = () =>
+    hh3dHeaders('xhr', {
+      referer: pageUrl,
+      'x-requested-with': 'XMLHttpRequest',
+      'x-halim-client': client,
+      cookie: s.cookie(),
+    });
 
   const cfgUrl =
     `${origin}/wp-content/themes/halimmovies/player.php` +
     `?episode_slug=${encodeURIComponent(parsed.episode)}&server_id=${encodeURIComponent(parsed.server)}` +
     `&subsv_id=&post_id=${postId}`;
-  const cfg = await (await s.go(cfgUrl, { headers: headers() })).json().catch(() => null);
-  if (!cfg?._encrypted || !cfg.kid || !cfg.iv || !cfg.payload) return null;
+  const cfgRes = await s.go(cfgUrl, { headers: headers() });
+  const cfg = await cfgRes.json().catch(() => null);
+  if (!cfg?._encrypted || !cfg.kid || !cfg.iv || !cfg.payload) {
+    return note(trace, `player.php HTTP ${cfgRes.status}: ${JSON.stringify(cfg).slice(0, 120)}`);
+  }
 
   const keyRes = await s.go(`${origin}/wp-json/halim/v1/player-key`, {
     method: 'POST',
@@ -170,7 +185,7 @@ async function playerConfig(pageUrl) {
     body: JSON.stringify({ key_id: cfg.kid }),
   });
   const keyJson = await keyRes.json().catch(() => null);
-  if (!keyJson?.key) return null;
+  if (!keyJson?.key) return note(trace, `player-key HTTP ${keyRes.status}: ${JSON.stringify(keyJson).slice(0, 120)}`);
 
   const key = await crypto.subtle.importKey('raw', b64url(keyJson.key), { name: 'AES-GCM' }, false, ['decrypt']);
   const plain = await crypto.subtle.decrypt(
@@ -187,7 +202,7 @@ async function playerConfig(pageUrl) {
   const common = { label: data?.label || null, skip: Number(data?.skip_time) || 0 };
   if (data?.file) return { ...common, file: data.file };
   if (data?.embed_url) return { ...common, embedUrl: data.embed_url };
-  return null;
+  return note(trace, `giải mã xong nhưng không có file/embed_url: ${JSON.stringify(data).slice(0, 160)}`);
 }
 
 /**
@@ -215,6 +230,10 @@ async function playerConfig(pageUrl) {
  */
 async function playlistFromEmbed(embedUrl) {
   const referer = `${await hh3dBase()}/`;
+  // CỐ Ý chỉ user-agent + referer, ngược hẳn với trang chính: CDN embed trả 403
+  // cho bộ header đầy đủ (đo 15/11/2026) vì một iframe thật gửi
+  // `sec-fetch-dest: iframe` + `sec-fetch-site: cross-site`, không phải
+  // `document`/`same-origin`. Khai sai vai còn tệ hơn không khai.
   const res = await fetch(embedUrl, {
     headers: { 'user-agent': CONFIG.userAgent, referer },
     signal: AbortSignal.timeout(CONFIG.httpTimeout),
@@ -288,14 +307,14 @@ async function playlistSource(config) {
  *
  * Cache theo cả hai: cùng một tập nhưng hai cách dựng là hai playlist khác nhau.
  */
-export async function playlistFor(pageUrl, { segmentBase = null } = {}) {
+export async function playlistFor(pageUrl, { segmentBase = null, trace = null } = {}) {
   const proxied = segmentBase && !CONFIG.hh3dDirectSegments ? segmentBase : null;
   const key = `hh3d:playlist:${proxied ? 'seg' : 'range'}:${pageUrl}`;
 
   const hit = cacheGet(key);
   if (hit) return hit;
 
-  const built = await build(pageUrl, proxied);
+  const built = await build(pageUrl, proxied, trace);
   // Chỉ cache khi có kết quả. Luồng này chập chờn — đo 22/09/2026: cùng một tập
   // 2 lần được 1 lần trượt — nên cache cả lần trượt là biến một cái vấp mạng
   // thành nửa tiếng phim không phát được, đúng cái bẫy getAliases từng mắc.
@@ -313,11 +332,11 @@ export async function playlistFor(pageUrl, { segmentBase = null } = {}) {
  * hạn chờ vì tiến trình sống lâu tái dùng một socket keep-alive đã chết —
  * lần sau đi socket mới.
  */
-async function build(pageUrl, segmentBase) {
+async function build(pageUrl, segmentBase, trace = null) {
   let last = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const out = await once(pageUrl, segmentBase);
+      const out = await once(pageUrl, segmentBase, trace);
       if (out) return out;
     } catch (err) {
       last = err;
@@ -327,14 +346,14 @@ async function build(pageUrl, segmentBase) {
   return null;
 }
 
-async function once(pageUrl, segmentBase) {
-  const config = await playerConfig(pageUrl);
+async function once(pageUrl, segmentBase, trace = null) {
+  const config = await playerConfig(pageUrl, trace);
   if (!config) return null;
 
   const source = await playlistSource(config);
-  if (!source) return null;
+  if (!source) return note(trace, `không mở được nguồn: ${config.file ? 'file ' + String(config.file).slice(0, 80) : 'embed ' + String(config.embedUrl).slice(0, 80)}`);
   const { text, base } = source;
-  if (!/^#EXTM3U/.test(text.trim())) return null;
+  if (!/^#EXTM3U/.test(text.trim())) return note(trace, `nguồn trả về không phải m3u8: ${text.slice(0, 80).replace(/\s+/g, ' ')}`);
 
   // Playlist nhiều chất lượng thì từng dòng con lại là một playlist nữa, và viết
   // lại dòng segment lên đó là sai — báo không xử lý được thay vì trả bừa.
