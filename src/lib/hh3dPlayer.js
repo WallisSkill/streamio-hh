@@ -135,6 +135,12 @@ function note(trace, why) {
   return null;
 }
 
+/** Như note(), nhưng cho chỗ phải trả về danh sách đường phát. */
+function noneOf(trace, why) {
+  note(trace, why);
+  return [];
+}
+
 /** Chuỗi ngẫu nhiên đóng vai X-Halim-Client, như player tự sinh trong sessionStorage. */
 const clientId = () =>
   [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -147,9 +153,9 @@ export function parseEpisodeUrl(pageUrl) {
 }
 
 /** Cấu hình player đã giải mã cho một trang tập, hoặc null. */
-async function playerConfig(pageUrl, trace = null) {
+async function playerConfigs(pageUrl, trace = null) {
   const parsed = parseEpisodeUrl(pageUrl);
-  if (!parsed) return note(trace, 'url tập không đúng dạng');
+  if (!parsed) return noneOf(trace, 'url tập không đúng dạng');
 
   const origin = new URL(pageUrl).origin;
   const client = clientId();
@@ -157,9 +163,9 @@ async function playerConfig(pageUrl, trace = null) {
 
   // Trang tập trước: nó vừa cho post_id vừa mở phiên (cookie).
   const pageRes = await s.go(pageUrl, { headers: hh3dHeaders() });
-  if (!pageRes.ok) return note(trace, `trang tập HTTP ${pageRes.status}`);
+  if (!pageRes.ok) return noneOf(trace, `trang tập HTTP ${pageRes.status}`);
   const postId = /"post_id":\s*"?(\d+)/.exec(await pageRes.text())?.[1];
-  if (!postId) return note(trace, 'trang tập không có post_id');
+  if (!postId) return noneOf(trace, 'trang tập không có post_id');
 
   const headers = () =>
     hh3dHeaders('xhr', {
@@ -169,40 +175,64 @@ async function playerConfig(pageUrl, trace = null) {
       cookie: s.cookie(),
     });
 
-  const cfgUrl =
-    `${origin}/wp-content/themes/halimmovies/player.php` +
-    `?episode_slug=${encodeURIComponent(parsed.episode)}&server_id=${encodeURIComponent(parsed.server)}` +
-    `&subsv_id=&post_id=${postId}`;
-  const cfgRes = await s.go(cfgUrl, { headers: headers() });
-  const cfg = await cfgRes.json().catch(() => null);
-  if (!cfg?._encrypted || !cfg.kid || !cfg.iv || !cfg.payload) {
-    return note(trace, `player.php HTTP ${cfgRes.status}: ${JSON.stringify(cfg).slice(0, 120)}`);
+  // Mỗi "sub server" là một đường phát khác nhau của CÙNG một tập, và chúng
+  // không cùng sống cùng chết: hôm nay `subsv_id=1` trả HLS thẳng từ
+  // cdn.ibytedance.net, còn đường mặc định trả trang embed trên
+  // scontent.ibytedance.net — mà chính trang embed đó là chỗ hôm nay chặn
+  // addon. Lấy hết rồi để bên gọi dùng cái nào chạy được, chứ lấy đúng một
+  // đường là cả nguồn HH3D chết theo nó.
+  //
+  // Không gọi `subsv_id=2`: đó là server 4K và nó trả 403 "chỉ dành cho thành
+  // viên VIP" — gọi thêm chỉ tốn một vòng mạng để nhận lại đúng câu đó.
+  const out = [];
+  for (const subsv of ['1', '']) {
+    const cfgUrl =
+      `${origin}/wp-content/themes/halimmovies/player.php` +
+      `?episode_slug=${encodeURIComponent(parsed.episode)}&server_id=${encodeURIComponent(parsed.server)}` +
+      `&subsv_id=${subsv}&post_id=${postId}`;
+    const cfgRes = await s.go(cfgUrl, { headers: headers() });
+    const cfg = await cfgRes.json().catch(() => null);
+    if (!cfg?._encrypted || !cfg.kid || !cfg.iv || !cfg.payload) {
+      note(trace, `subsv=${subsv || 'mặc định'}: player.php HTTP ${cfgRes.status}: ${JSON.stringify(cfg).slice(0, 110)}`);
+      continue;
+    }
+
+    const keyRes = await s.go(`${origin}/wp-json/halim/v1/player-key`, {
+      method: 'POST',
+      headers: { ...headers(), 'content-type': 'application/json' },
+      body: JSON.stringify({ key_id: cfg.kid }),
+    });
+    const keyJson = await keyRes.json().catch(() => null);
+    if (!keyJson?.key) {
+      note(trace, `subsv=${subsv || 'mặc định'}: player-key HTTP ${keyRes.status}: ${JSON.stringify(keyJson).slice(0, 110)}`);
+      continue;
+    }
+
+    let data;
+    try {
+      const key = await crypto.subtle.importKey('raw', b64url(keyJson.key), { name: 'AES-GCM' }, false, ['decrypt']);
+      const plain = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: b64url(cfg.iv), tagLength: 128 },
+        key,
+        b64url(cfg.payload),
+      );
+      data = JSON.parse(new TextDecoder().decode(plain));
+    } catch (err) {
+      note(trace, `subsv=${subsv || 'mặc định'}: giải mã hỏng — ${err.message}`);
+      continue;
+    }
+
+    // HH3D giao theo hai kiểu, và đổi giữa chúng lúc nào cũng được: `file` là
+    // playlist HLS thẳng, `embed_url` là trang player của CDN (xem
+    // playlistFromEmbed). Tập không có nguồn phát trả về { data: { sources: "" } }
+    // — đúng hình dạng nhưng rỗng, nên xét hai trường đó chứ không xét `status`.
+    const common = { label: data?.label || null, skip: Number(data?.skip_time) || 0 };
+    if (data?.file) out.push({ ...common, file: data.file });
+    else if (data?.embed_url) out.push({ ...common, embedUrl: data.embed_url });
+    else note(trace, `subsv=${subsv || 'mặc định'}: không có file/embed_url — ${JSON.stringify(data).slice(0, 140)}`);
   }
 
-  const keyRes = await s.go(`${origin}/wp-json/halim/v1/player-key`, {
-    method: 'POST',
-    headers: { ...headers(), 'content-type': 'application/json' },
-    body: JSON.stringify({ key_id: cfg.kid }),
-  });
-  const keyJson = await keyRes.json().catch(() => null);
-  if (!keyJson?.key) return note(trace, `player-key HTTP ${keyRes.status}: ${JSON.stringify(keyJson).slice(0, 120)}`);
-
-  const key = await crypto.subtle.importKey('raw', b64url(keyJson.key), { name: 'AES-GCM' }, false, ['decrypt']);
-  const plain = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: b64url(cfg.iv), tagLength: 128 },
-    key,
-    b64url(cfg.payload),
-  );
-  const data = JSON.parse(new TextDecoder().decode(plain));
-
-  // HH3D giao theo hai kiểu, và đổi giữa chúng lúc nào cũng được: `file` là
-  // playlist HLS thẳng, `embed_url` là trang player của CDN (xem
-  // playlistFromEmbed). Tập không có nguồn phát trả về { data: { sources: "" } }
-  // — đúng hình dạng nhưng rỗng, nên xét hai trường đó chứ không xét `status`.
-  const common = { label: data?.label || null, skip: Number(data?.skip_time) || 0 };
-  if (data?.file) return { ...common, file: data.file };
-  if (data?.embed_url) return { ...common, embedUrl: data.embed_url };
-  return note(trace, `giải mã xong nhưng không có file/embed_url: ${JSON.stringify(data).slice(0, 160)}`);
+  return out;
 }
 
 /**
@@ -347,9 +377,17 @@ async function build(pageUrl, segmentBase, trace = null) {
 }
 
 async function once(pageUrl, segmentBase, trace = null) {
-  const config = await playerConfig(pageUrl, trace);
-  if (!config) return null;
+  // Thử lần lượt mọi đường HH3D giao, lấy cái ĐẦU TIÊN thật sự ra playlist.
+  // Trước đây chỉ có một đường: đường đó chặn là cả nguồn tắt, dù đường kia của
+  // chính họ vẫn mở.
+  for (const config of await playerConfigs(pageUrl, trace)) {
+    const out = await fromConfig(pageUrl, segmentBase, config, trace);
+    if (out) return out;
+  }
+  return null;
+}
 
+async function fromConfig(pageUrl, segmentBase, config, trace) {
   const source = await playlistSource(config);
   if (!source) return note(trace, `không mở được nguồn: ${config.file ? 'file ' + String(config.file).slice(0, 80) : 'embed ' + String(config.embedUrl).slice(0, 80)}`);
   const { text, base } = source;

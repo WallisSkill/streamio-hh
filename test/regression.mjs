@@ -9,8 +9,51 @@
  *
  * Các case `source: 'nguonc'` cần chạy từ IP dân cư: Cloudflare của nguonc
  * chặn IP datacenter, nên trên server thuê chúng sẽ fail vì lý do khác.
+ *
+ * Một case khai id theo MỘT trong hai cách:
+ *   - `id: 'series/tt…:2:1'` — khi chính cách đánh số phần là thứ đang test.
+ *   - `imdb` + `absolute` — khi thứ đang test là khớp tập. Cách chia phần của
+ *     Cinemeta đổi xoành xoạch, nên để nó tự dò (xem orderedEpisodes bên dưới).
  */
 const BASE = process.env.ADDON || 'http://localhost:7010';
+
+/**
+ * Tập thứ N của cả bộ -> id mà Stremio ĐANG hỏi.
+ *
+ * Cinemeta chia lại phần của một bộ bất cứ lúc nào: Thôn Phệ Tinh Không trong
+ * một tuần đi từ 5 phần (26/26/33/123/42) sang một phần 250 tập rồi quay lại 5
+ * phần. Viết cứng "tt17050076:4:56" thì mỗi lần họ đổi là ba ca FAIL vì hỏi sai
+ * chỗ, chứ không phải vì addon khớp sai — tôi đã mất hai lần sửa để nhận ra.
+ *
+ * Nên case khai SỐ TẬP TUYỆT ĐỐI, còn chỗ ngồi của nó thì hỏi Cinemeta lúc
+ * chạy, đúng như Stremio tự làm. Phần 0 không tính vào đây: ngoại truyện không
+ * nằm trong mạch tập.
+ */
+const metaCache = new Map();
+async function orderedEpisodes(imdbId) {
+  if (!metaCache.has(imdbId)) {
+    const r = await fetch(`https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`);
+    const j = await r.json().catch(() => null);
+    const videos = (j?.meta?.videos || [])
+      .filter((v) => Number(v.season) > 0 && Number.isFinite(Number(v.episode ?? v.number)))
+      .map((v) => ({ season: Number(v.season), episode: Number(v.episode ?? v.number) }))
+      .sort((a, b) => a.season - b.season || a.episode - b.episode);
+    metaCache.set(imdbId, videos);
+  }
+  return metaCache.get(imdbId);
+}
+
+/** id Stremio của tập tuyệt đối thứ N, hoặc null nếu Cinemeta chưa có tập đó. */
+async function idOfAbsolute(imdbId, absolute) {
+  const list = await orderedEpisodes(imdbId);
+  const at = list[absolute - 1];
+  return at ? `series/${imdbId}:${at.season}:${at.episode}` : null;
+}
+
+/** Tập cuối Cinemeta đang có, theo số thứ tự tuyệt đối. */
+async function lastAbsolute(imdbId) {
+  return (await orderedEpisodes(imdbId)).length;
+}
 
 const CASES = [
   { id: 'series/tt2560140:1:5', want: { mode: 'season-entry', target: 5 }, why: 'AoT: nguồn tách theo phần' },
@@ -20,12 +63,10 @@ const CASES = [
   { id: 'series/tt0388629:21:1', want: { mode: 'absolute', target: 891 }, why: 'One Piece S21E1 = tập 891' },
   { id: 'movie/tt37141816', want: { mode: 'movie' }, why: 'Phim lẻ khớp bằng IMDb id' },
   {
-    // Cinemeta đã gộp bộ này về MỘT phần 250 tập (trước là S4E56), nên case phải
-    // hỏi theo cách Stremio đang hỏi — hỏi theo cách cũ thì fail vì Cinemeta
-    // không còn phần 4, chứ không phải vì khớp tập sai.
-    id: 'series/tt17050076:1:141',
+    imdb: 'tt17050076',
+    absolute: 141,
     source: 'nguonc',
-    want: { mode: 'season-relative', target: 141 },
+    want: { target: 141 },
     wantStream: 'Nguồn C',
     why: 'Thôn Phệ Tinh Không: bỏ mục 26 tập, rơi xuống mục gộp -> tập 141',
   },
@@ -37,19 +78,24 @@ const CASES = [
     why: 'Soul Land 2: phụ đề lệch (Clan/Sect) -> khớp phần trước dấu hai chấm',
   },
   {
-    // Ca này hết giá trị khi tập 250 lên sóng — lúc đó nó phải CÓ stream.
-    id: 'series/tt17050076:1:250',
+    // Tập CUỐI Cinemeta đang có, thường là tập nguồn trong nước chưa kịp làm.
+    // Không đòi "phải trống" vì nguồn sẽ bắt kịp: đòi ĐÚNG TẬP HOẶC KHÔNG CÓ —
+    // đó mới là điều phải đúng mãi mãi, và chính là chỗ trước đây addon đoán
+    // bừa sang tập khác.
+    imdb: 'tt17050076',
+    absolute: 'cuối',
     source: 'nguonc',
-    wantNoStream: true,
+    wantExactOrNone: true,
     want: {},
-    why: 'Tập 250 chưa ra: không nguồn nào được đoán sang tập khác',
+    why: 'Tập mới nhất: hoặc đúng số tập ấy, hoặc không có dòng nào',
   },
   {
-    id: 'series/tt17050076:1:209',
+    imdb: 'tt17050076',
+    absolute: 209,
     source: 'nguonc',
     wantStream: 'Nguồn C',
-    want: { mode: 'season-relative', target: 209 },
-    why: 'Tập 209 (xưa là S5E1): bỏ mục 26 tập để rơi xuống mục gộp',
+    want: { target: 209 },
+    why: 'Tập 209: bỏ mục 26 tập để rơi xuống mục gộp',
   },
   {
     id: 'series/tt27432264:0:1',
@@ -71,16 +117,34 @@ const CASES = [
 
 let pass = 0;
 for (const c of CASES) {
+  // Ca khai số tập tuyệt đối thì hỏi Cinemeta xem tập ấy đang ngồi ở phần nào.
+  if (c.imdb) {
+    const n = c.absolute === 'cuối' ? await lastAbsolute(c.imdb) : c.absolute;
+    c.id = await idOfAbsolute(c.imdb, n);
+    if (c.want.target === undefined && c.wantExactOrNone) c.want = { ...c.want, target: n };
+    if (!c.id) {
+      console.log(`SKIP  ${c.imdb} tập ${n}: Cinemeta chưa có tập này`);
+      pass += 1;
+      continue;
+    }
+  }
   const res = await fetch(`${BASE}/debug/${c.id}`);
   const json = await res.json();
   const src = c.source || 'kkphim';
   const d = json.debug?.sources?.[src]?.decision || {};
   const okMode = c.want.mode === undefined || d.mode === c.want.mode;
-  const okTarget = c.want.target === undefined || d.target === c.want.target;
+  // "Đúng tập hoặc không có": nguồn chưa làm tới tập đó thì trống là đúng, chứ
+  // không được ra một tập khác. Cách chia phần đổi thì tên mode đổi theo
+  // (absolute <-> season-relative), nên những ca này không chốt mode.
+  const noRows = (json.streams || []).length === 0;
+  const okTarget =
+    c.want.target === undefined || d.target === c.want.target || (c.wantExactOrNone && noRows);
   // `includes` chứ không phải `startsWith`: tên stream mang tiền tố thương hiệu
   // ở đầu, đổi tên addon không được làm hỏng bộ test.
-  const okStream = c.wantNoStream
-    ? (json.streams || []).length === 0
+  const okStream = c.wantExactOrNone
+    ? true
+    : c.wantNoStream
+    ? noRows
     : c.wantStream
       ? (json.streams || []).some((s) => String(s.name || '').includes(c.wantStream))
       : (json.streams || []).length > 0;
