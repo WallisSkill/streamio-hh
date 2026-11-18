@@ -446,6 +446,19 @@ async function hh3dRow({ name, epNum, page, note, baseUrl, slug }) {
  * Slug ghim trong overrides.json vẫn là đường chắc nhất cho phim mà cả hai cách
  * trên đều không tìm ra.
  */
+function episodeOf(entry, target, parsed) {
+  const server = entry.servers?.[0];
+  if (!server?.episodes?.length) return null;
+  const picked = resolveEpisode({
+    entry,
+    server,
+    season: parsed.season,
+    episode: (parsed.episode ?? 1) + (target.override?.offset || 0),
+    index: target.index,
+  });
+  return { picked };
+}
+
 async function hh3dStream(target, parsed, dbg, baseUrl, vnTitles = []) {
   if (!CONFIG.enableHh3d || parsed.season == null) return [];
 
@@ -457,36 +470,50 @@ async function hh3dStream(target, parsed, dbg, baseUrl, vnTitles = []) {
   if (pin) {
     entry = (await hh3d.detail(pin)) || { slug: pin, name: target.name, season: null, maxEpisode: 0, servers: [] };
   } else {
-    const queries = [...new Set([...vnNames, ...buildQueries(target, parsed.season).slice(0, 2)])].slice(0, 4);
+    const merged = vnNames.flatMap((name) => [name, name.replace(/\s+(?:phần|season|mùa)?\s*\d{1,2}$/i, '').trim()]).filter(Boolean);
+    const queries = [...new Set([...merged, ...buildQueries(target, parsed.season).slice(0, 2)])].slice(0, 4);
     dbg.queries = queries;
 
     const candidates = (await Promise.all(queries.map((q) => hh3d.search(q)))).flat();
-    const scored = filterCandidates(candidates, local, 'series');
+    const seen = new Set();
+    const scored = filterCandidates(candidates, local, 'series').filter((c) => !seen.has(c.candidate.slug) && seen.add(c.candidate.slug));
     const best = pickEntry(scored, parsed.season);
     if (!best) return [];
-    dbg.picked = { slug: best.candidate.slug, score: best.score, reasons: best.reasons, season: best.candidate.season };
-    entry = await hh3d.detail(best.candidate.slug);
+    const tried = [];
+    for (const pick of [best, ...scored.filter((c) => c !== best)].slice(0, 3)) {
+      const found = await hh3d.detail(pick.candidate.slug);
+      dbg.picked = { slug: pick.candidate.slug, score: pick.score, reasons: pick.reasons, season: pick.candidate.season };
+      const hit = found && episodeOf(found, target, parsed);
+      if (hit?.picked.episode) {
+        if (tried.length) dbg.tried = tried;
+        dbg.decision = hit.picked.decision;
+        const row = await hh3dRow({
+          name: found.name,
+          epNum: hit.picked.episode.num,
+          page: hit.picked.episode.page,
+          note: hit.picked.decision.note,
+          baseUrl,
+          slug: found.slug,
+        });
+        return row ? [row] : [];
+      }
+      tried.push({ slug: pick.candidate.slug, why: found ? hit?.picked.decision?.note || 'không có tập nào khớp' : 'trang không có danh sách tập' });
+    }
+    dbg.tried = tried;
+    return [];
   }
   if (!entry) return [];
 
-  const server = entry.servers?.[0];
-
   // Episode list read from the site -> map it like any other source.
-  if (server?.episodes?.length) {
-    const picked = resolveEpisode({
-      entry,
-      server,
-      season: parsed.season,
-      episode: (parsed.episode ?? 1) + (target.override?.offset || 0),
-      index: target.index,
-    });
-    dbg.decision = picked.decision;
-    if (!picked.episode) return [];
+  const hit = episodeOf(entry, target, parsed);
+  if (hit) {
+    dbg.decision = hit.picked.decision;
+    if (!hit.picked.episode) return [];
     const row = await hh3dRow({
       name: entry.name,
-      epNum: picked.episode.num,
-      page: picked.episode.page,
-      note: picked.decision.note,
+      epNum: hit.picked.episode.num,
+      page: hit.picked.episode.page,
+      note: hit.picked.decision.note,
       baseUrl,
       slug: entry.slug,
     });
@@ -571,7 +598,7 @@ export async function getStreams(type, rawId, { baseUrl = '' } = {}) {
   // tên tiếng Việt lại là thứ các nguồn API vừa tìm ra. Trả giá bằng một chặng
   // chờ nữa, nhưng chặng đó quyết định có tìm thấy phim hay không, chứ không phải
   // chỉ để nhanh hơn.
-  const vnTitles = [...new Set(Object.values(debug.sources).map((s) => s.picked?.name).filter(Boolean))];
+  const vnTitles = [...new Set(Object.values(debug.sources).filter((s) => s.picked?.name && !s.decision?.guess).map((s) => s.picked.name))];
   const fromHh3d =
     wantType === 'series' ? await guard('hh3d', (dbg) => hh3dStream(target, parsed, dbg, baseUrl, vnTitles)) : [];
 
